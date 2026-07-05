@@ -1,3 +1,14 @@
-pytest>=7.0
-pytest-cov>=4.0
-pyyaml>=6.0
+anthropic>=0.103.1
+alpaca-py>=0.20.1
+yfinance>=0.2.43
+pandas-ta>=0.4.71b0
+python-dotenv>=1.0.0
+requests>=2.31.0
+pytz>=2024.1
+pandas>=2.3.2
+scikit-learn
+hmmlearn
+flask
+mcp>=1.0.0
+pyarrow>=14.0.0
+xgboost>=2.0.0
