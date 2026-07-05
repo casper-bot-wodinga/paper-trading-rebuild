@@ -1,0 +1,34 @@
+# Trading stack — add to existing Docker host on 192.168.1.179
+# Include this in your main compose or run standalone:
+#   docker compose -f docker-compose.trading.yml up -d
+
+services:
+  canvas:
+    build: ./canvas
+    container_name: trading-canvas
+    restart: unless-stopped
+    networks:
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.canvas.rule=Host(`canvas.wodinga.studio`)"
+      - "traefik.http.routers.canvas.entrypoints=websecure"
+      - "traefik.http.routers.canvas.tls.certresolver=letsencrypt"
+      - "traefik.http.services.canvas.loadbalancer.server.port=8777"
+
+  dashboard:
+    build: ./dashboard
+    container_name: trading-dashboard
+    restart: unless-stopped
+    networks:
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`dashboard.wodinga.studio`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=5002"
+
+networks:
+  traefik-public:
+    external: true
