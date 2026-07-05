@@ -519,20 +519,70 @@ If a parameter is changed and then reverted within 20 days, the change budget fo
 
 ## §13 — Prompt Evolution Pipeline
 
-### 13.1 Prompt Versioning
+### 13.1 Git-Based Prompt Versioning
+
+Prompts live in the agents repo (`casper-bot-wodinga/paper-trading-agents`). Every version is a git commit. Branching is how we experiment; merging is how we promote.
 
 ```
 agents/
   traders/
-    kairos/
-      prompt.md          ← current (has version header)
-      prompt_history/
-        v1.0.0.md        ← original
-        v1.0.1.md        ← "more emphasis on risk"
-        v1.0.2.md        ← current (improved by sweep)
+    kairos/prompt.md       ← the actual prompt file (git-tracked)
+    aldridge/prompt.md
+    stonks/prompt.md
 ```
 
-### 13.2 Weekly Review (Sunday)
+**Branch structure:**
+
+```
+main                        ← production prompt. What traders use in live ticks.
+│
+├── kairos/v1.0.0           ← tagged stable releases (git tag, immutable)
+├── kairos/v1.0.1
+├── aldridge/v1.0.0
+├── stonks/v1.0.0
+│
+sweep/YYYY-MM-DD/           ← nightly auto-generated branches
+├── kairos/variant-001      ← "paraphrased strategy, Calmar +0.3 on replay"
+├── kairos/variant-047      ← "risk emphasis = high, Sortino +0.5"
+├── kairos/variant-089      ← "reordered instructions, Calmar -0.1"
+└── ... (100 total per night)
+│
+experiment/{trader}/         ← manual or agent-proposed experiments
+├── kairos/more-momentum
+├── aldridge/value-only
+└── stonks/sentiment-heavy
+```
+
+**Winner promotion flow:**
+
+```
+Night: sweep runs 100 variants on Docker workers
+  → variant-047 scores +5.2% Calmar vs baseline on replay
+  → auto-PR: sweep/2026-07-05/kairos/variant-047 → main
+  → CI runs: replay validation, statistical significance check
+  → Hermes + Casper review
+  → Squash-merged to main
+  → Tagged: kairos/v1.0.3
+  → Trader picks up new prompt on next tick
+```
+
+**Pruning rules (runs nightly via cron):**
+
+| Branch pattern | Delete after | Condition |
+|---|---|---|
+| `sweep/*` | 7 days | Always — sweep branches are disposable |
+| `experiment/*` | 14 days | If no PR opened and no commits in 7 days |
+| Tags | Never | Immutable release history |
+
+```bash
+# Nightly cleanup cron
+git fetch --prune
+git branch -r | grep 'sweep/' | while read b; do
+  git push origin --delete "${b#origin/}"
+done
+```
+
+Losing variants are the point — 99 of 100 branches die every night, but the 1 that survived made the trader better. The repo stays clean because dead branches auto-prune.
 
 Automated analysis:
 1. Group trades by prompt version active at the time
