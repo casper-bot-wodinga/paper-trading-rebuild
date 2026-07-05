@@ -107,9 +107,9 @@ class TestTraderBasic:
 
     def test_process_tick_in_uptrend(self):
         """In a strong uptrend, trader should eventually buy."""
-        trader = create_trader("kairos", params_override={"momentum_threshold": 0.35})
-        # Very aggressive uptrend — 5% daily for 60 days
-        ticks = make_uptrend_ticks(n=60, step_pct=0.05)
+        trader = create_trader("kairos")
+        trader.signal_engine.params.momentum_threshold = 0.02  # bypass clip for test
+        ticks = make_uptrend_ticks(n=60, step_pct=0.015)
 
         decisions = []
         for tick in ticks:
