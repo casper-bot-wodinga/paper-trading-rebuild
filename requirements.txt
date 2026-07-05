@@ -12,3 +12,4 @@ flask
 mcp>=1.0.0
 pyarrow>=14.0.0
 xgboost>=2.0.0
+pyyaml>=6.0
