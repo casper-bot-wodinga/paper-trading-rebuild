@@ -1,0 +1,119 @@
+# Data Bus Configuration
+# Endpoints, cache TTLs, API rate limits for the centralized data bus.
+# Secrets (API keys) are resolved from env vars, never stored here.
+
+# ── Service Endpoints ─────────────────────────────────────────────────────────
+endpoints:
+  finbert:
+    host: "${FINBERT_HOST:-192.168.1.237}"
+    port: "${FINBERT_PORT:-5004}"
+    timeout: 15
+
+  mcp_port: "${MCP_PORT:-5001}"
+  data_bus_port: "${DATA_BUS_PORT:-5000}"
+
+  # External APIs (no auth required — free/public)
+  fred_csv: "https://fred.stlouisfed.org/graph/fredgraph.csv"
+  nasdaq_earnings: "https://api.nasdaq.com/api/calendar/earnings"
+  alternative_me: "https://api.alternative.me/fng/"
+  unusual_whales_rss: "https://unusual-whales.ghost.io/rss/"
+  sec_edgar: "https://efts.sec.gov/LATEST/search-index"
+  sec_company_tickers: "https://www.sec.gov/files/company_tickers.json"
+  alpaca_news: "https://data.alpaca.markets/v1beta1/news"
+
+# ── Cache TTLs (seconds) ─────────────────────────────────────────────────────
+cache_ttl:
+  quotes: 5
+  crypto: 10
+  fundamentals: 21600      # 6h
+  options: 900             # 15m
+  congress: 1800           # 30m
+  news: 180                # 3m
+  sentiment: 300           # 5m
+  social: 900              # 15m
+  macro: 21600             # 6h
+  earnings: 86400          # 24h
+  fear_greed: 1800         # 30m
+  flow: 300                # 5m
+  insiders: 1800           # 30m
+  risk: 900                # 15m
+  technical_scan: 300      # 5m
+  praesentire_sentiment: 300    # 5m
+  sentiment_divergence: 600     # 10m
+
+# ── Scheduler Intervals (seconds) ─────────────────────────────────────────────
+# Dual-rate: fast during market hours, slow off-hours.
+scheduler_intervals:
+  quotes:
+    market: 5
+    off: 300
+  crypto:
+    market: 10
+    off: 60
+  news:
+    market: 180
+    off: 900
+  sentiment:
+    market: 300
+    off: 900
+  congress:
+    market: 1800
+    off: 7200
+  signals_gc:
+    market: 60
+    off: 300
+  cache_flush:
+    market: 300
+    off: 1200
+  social:
+    market: 180
+    off: 900
+  momentum:
+    market: 300
+    off: 1800
+  macro:
+    market: 21600
+    off: 21600
+  earnings:
+    market: 3600
+    off: 86400
+  fear_greed:
+    market: 1800
+    off: 3600
+  flow:
+    market: 300
+    off: 900
+  insiders:
+    market: 1800
+    off: 7200
+  risk:
+    market: 900
+    off: 3600
+  technical_scan:
+    market: 300
+    off: 900
+  praesentire_sentiment:
+    market: 300
+    off: 900
+  praesentire_divergence:
+    market: 600
+    off: 900
+
+# ── Rate Limits ───────────────────────────────────────────────────────────────
+rate_limits:
+  quotes_per_min: 200      # Alpaca free tier
+  crypto_per_min: 200
+
+# ── Signal Retention ─────────────────────────────────────────────────────────
+signals:
+  max_age: 900             # 15 minutes — purge stale signals
+
+# ── Write-Behind Queue ───────────────────────────────────────────────────────
+write_queue:
+  default_interval: 15     # seconds, market hours
+  off_hours_interval: 60   # seconds, off-hours
+
+# ── Reddit / Social ──────────────────────────────────────────────────────────
+social:
+  max_tickers: 50
+  max_positions: 5

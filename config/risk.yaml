@@ -1,0 +1,41 @@
+# Risk Management Configuration
+# Risk gate parameters, position thresholds, drawdown limits.
+
+# ── Position Limits ───────────────────────────────────────────────────────────
+position:
+  max_position_pct: 0.10       # Max 10% of portfolio in single position
+  max_sector_pct: 0.30         # Max 30% in single sector
+  max_total_exposure: 0.85     # Max 85% total exposure (leave 15% cash)
+  max_positions: 12            # Max concurrent positions
+
+# ── Drawdown Protection ───────────────────────────────────────────────────────
+drawdown:
+  daily_loss_pct: 0.03         # 3% daily loss limit — halt trading
+  weekly_loss_pct: 0.07        # 7% weekly loss limit
+  max_drawdown_pct: 0.20       # 20% max drawdown from peak
+
+# ── Position Sizing ───────────────────────────────────────────────────────────
+sizing:
+  risk_per_trade_pct: 0.01     # 1% account risk per trade
+  min_position_value: 500      # Minimum $500 position
+  max_position_value: 5000     # Maximum $5000 position (paper constraint)
+
+# ── Stop Loss ─────────────────────────────────────────────────────────────────
+stop_loss:
+  default_pct: 0.05            # 5% default stop loss
+  trailing_pct: 0.03           # 3% trailing stop
+  atr_multiplier: 2.0          # ATR multiplier for volatility-based stops
+  profit_target_pct: 0.15      # 15% profit target
+
+# ── Risk Gates ────────────────────────────────────────────────────────────────
+gates:
+  require_conviction: 0.6      # Minimum conviction to enter trade (0.0–1.0)
+  require_thesis: true         # Require written thesis for each trade
+  max_correlated_bets: 3       # Max correlated positions (same sector/theme)
+  vetos_before_force_hold: 3   # Consecutive vetos before forcing cash-only
+
+# ── Volatility Filters ───────────────────────────────────────────────────────
+volatility:
+  max_vix_threshold: 35        # Halt new entries when VIX > 35
+  min_volume_rank: 0.30        # Minimum volume percentile (0.0–1.0)
+  max_spread_pct: 0.005        # Max bid/ask spread 0.5%

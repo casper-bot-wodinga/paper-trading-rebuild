@@ -1,0 +1,47 @@
+# Trader Agent Configuration
+# Model routing, heartbeat intervals, trader identities.
+
+# ── Trader Definitions ───────────────────────────────────────────────────────
+traders:
+  - id: "trader-kairos"
+    name: "Kairos"
+    description: "Macro regime-aware trader"
+    model: "${KAIROS_MODEL:-openrouter/anthropic/claude-sonnet-4.5}"
+    heartbeat_interval: 300      # seconds
+    active: true
+
+  - id: "trader-aldridge"
+    name: "Aldridge"
+    description: "Statistical arbitrage / quant trader"
+    model: "${ALDRIDGE_MODEL:-openrouter/anthropic/claude-sonnet-4.5}"
+    heartbeat_interval: 300
+    active: true
+
+  - id: "trader-momentum"
+    name: "Momentum"
+    description: "Cross-sectional momentum trader"
+    model: "${MOMENTUM_MODEL:-openrouter/anthropic/claude-sonnet-4.5}"
+    heartbeat_interval: 300
+    active: true
+
+  - id: "trader-stonks"
+    name: "Stonks"
+    description: "Social sentiment / meme trader"
+    model: "${STONKS_MODEL:-openrouter/anthropic/claude-sonnet-4.5}"
+    heartbeat_interval: 300
+    active: true
+
+  - id: "trader-value"
+    name: "Value"
+    description: "Deep value / fundamentals trader"
+    model: "${VALUE_MODEL:-openrouter/anthropic/claude-sonnet-4.5}"
+    heartbeat_interval: 300
+    active: true
+
+# ── Default Model ─────────────────────────────────────────────────────────────
+default_model: "${DEFAULT_MODEL:-openrouter/anthropic/claude-sonnet-4.5}"
+
+# ── Heartbeat / Monitoring ────────────────────────────────────────────────────
+monitoring:
+  stale_threshold: 900       # seconds before trader considered stale
+  missed_heartbeat_limit: 3  # consecutive missed before alert

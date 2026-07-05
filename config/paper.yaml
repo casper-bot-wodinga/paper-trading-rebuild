@@ -1,0 +1,56 @@
+# Paper Trading Account Configuration
+# Simulated account parameters and environment.
+
+# ── Account ───────────────────────────────────────────────────────────────────
+account:
+  id: "${PAPER_ACCOUNT_ID:-paper-primary}"
+  initial_balance: 100000  # $100,000 paper account
+  currency: "USD"
+
+# ── Alpaca Paper Trading ─────────────────────────────────────────────────────
+# API keys come from env vars, NEVER from YAML.
+# Credential priority: env-specific keys → generic fallbacks
+alpaca:
+  paper: true                  # Use Alpaca paper trading endpoint
+  base_url: "${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}"
+  data_url: "${ALPACA_DATA_URL:-https://data.alpaca.markets}"
+
+  # Credential candidates (first found wins)
+  # Each trader may have its own key pair, plus fallbacks
+  credentials:
+    - key_env: "ALPACA_KAIROS_KEY"
+      secret_env: "ALPACA_KAIROS_SECRET"
+    - key_env: "KAIROS_API_KEY"
+      secret_env: "KAIROS_SECRET_KEY"
+    - key_env: "ALPACA_ALDRIDGE_KEY"
+      secret_env: "ALPACA_ALDRIDGE_SECRET"
+    - key_env: "ALDRIDGE_API_KEY"
+      secret_env: "ALDRIDGE_SECRET_KEY"
+    - key_env: "ALPACA_STONKS_KEY"
+      secret_env: "ALPACA_STONKS_SECRET"
+    - key_env: "STONKS_API_KEY"
+      secret_env: "STONKS_SECRET_KEY"
+
+# ── Commission Simulation ─────────────────────────────────────────────────────
+commissions:
+  enabled: false               # Paper trading: no real commissions
+  per_trade: 0.00              # $0 per trade
+  per_share: 0.00              # $0 per share
+
+# ── Data Sources ──────────────────────────────────────────────────────────────
+data_sources:
+  finnhub:
+    key_env: "FINNHUB_API_KEY"
+    rate_limit_per_min: 60
+  fred:
+    key_env: "FRED_API_KEY"
+    rate_limit_per_min: 120
+  alphavantage:
+    key_env: "ALPHA_VANTAGE_KEY"
+    rate_limit_per_day: 25
+
+# ── ML Integration ────────────────────────────────────────────────────────────
+ml:
+  endpoint: "${ML_ENDPOINT_URL:-http://localhost:5006}"
+  timeout: 30
+  retry_count: 3
