@@ -98,9 +98,10 @@ These cannot be violated. All code and PRs are audited against them.
 
 | Metric | Formula | Weight | Why |
 |--------|---------|--------|-----|
-| **Calmar ratio** | annualized_return ÷ abs(max_drawdown) | 0.50 | Balances return and risk in one number. Rewards consistency. |
+| **Calmar ratio** | annualized_return ÷ abs(max_drawdown) | 0.40 | Balances return and risk in one number. Rewards consistency. |
+| **Sortino ratio** | (return - risk_free) ÷ downside_deviation | 0.15 | Like Sharpe but only penalizes downside volatility. Better for trading. |
 | **Profit factor** | gross_profit ÷ gross_loss | 0.30 | "Do the wins outweigh the losses?" Pure edge detection. |
-| **Expectancy** | total_pnl ÷ num_trades | 0.20 | "How much does each trade make on average?" Dollar-denominated. |
+| **Expectancy** | total_pnl ÷ num_trades | 0.15 | "How much does each trade make on average?" Dollar-denominated. |
 
 **Knockout condition**: If max_drawdown > 15%, objective_score = 0 regardless of other metrics. Trader is paused.
 
@@ -892,3 +893,186 @@ Data storage on TrueNAS is organized by date: `market_data/bars/YYYY/MM/DD/`. Th
 ### 21.6 Timeframe
 
 Daily bars for the signal engine. 5-min bars provided to the LLM trader as supplementary intraday context. Gradient descent operates on daily-level parameters only. Add intraday parameters (entry/exit timing within the day) as a future phase once daily-level system is stable.
+
+---
+
+## §22 — Reinforcement Learning (Q-Learning)
+
+### 22.1 Why RL for Trading
+
+The gradient descent approach (§3) treats parameter tuning as a continuous optimization problem. But trading is fundamentally a **sequential decision problem under uncertainty**: an agent observes a state (market data, portfolio), takes an action (BUY/SELL/HOLD), receives a reward (P&L), and transitions to a new state. This maps exactly to the RL framework.
+
+Q-Learning learns a policy: given a market state, what action maximizes expected future reward? This is more principled than perturbing parameters and checking if P&L improved — it directly models the decision process.
+
+### 22.2 How Q-Learning Replaces/Supplements Gradient Descent
+
+```
+State space (discretized):
+  - Regime: TRENDING_UP | TRENDING_DOWN | MEAN_REVERTING | HIGH_VOL
+  - Momentum signal: LOW | MEDIUM | HIGH
+  - RSI zone: OVERSOLD | NEUTRAL | OVERBOUGHT
+  - Portfolio exposure: 0-20% | 20-40% | 40-60% | 60-80% | 80-100%
+  - Current drawdown: <5% | 5-10% | >10%
+
+Action space:
+  - BUY (with conviction: 0.25 | 0.50 | 0.75 | 1.0)
+  - SELL
+  - HOLD
+
+Reward:
+  - +1 for profitable closed trade
+  - -1 for losing closed trade
+  - -0.1 per tick for holding (encourages action)
+  - -5 for drawdown > 10% (catastrophic penalty)
+```
+
+### 22.3 Q-Table Update
+
+```
+Q(s, a) ← Q(s, a) + α [r + γ · max_a' Q(s', a') - Q(s, a)]
+
+α = learning rate (0.1, decays over time)
+γ = discount factor (0.95 — value future rewards highly)
+```
+
+The Q-table is persisted to disk after every update. On startup, the trader loads its Q-table. Over weeks of trading, the table converges to an optimal policy.
+
+### 22.4 Dual-Learner Architecture
+
+The system runs **both** gradient descent (§3) and Q-Learning (§22) simultaneously:
+
+```
+Tick processing:
+  1. Signal engine produces structured signals (gradient-tuned params)
+  2. Q-Learning agent proposes action based on state
+  3. LLM trader reviews both and makes final decision
+  4. After trade closes: Q-table updated with reward
+  5. Nightly: gradient runs on signal params, Q-table evaluation runs on replay
+
+Conflict resolution:
+  If gradient says BUY and Q-Learning says HOLD:
+    → LLM trader adjudicates, journaling which signal it followed
+    → Both learners get the outcome data
+    → Over time, the better learner's decisions correlate with better outcomes
+```
+
+### 22.5 Q-Learning vs Gradient Descent
+
+| Aspect | Gradient Descent (§3) | Q-Learning (§22) |
+|--------|----------------------|-------------------|
+| What it tunes | Continuous signal params | Discrete action policy |
+| Update speed | Per tick (small adjustments) | Per closed trade (sparse but meaningful) |
+| Cold start | Needs 20+ trades to be useful | Needs 100+ state visits per action |
+| Overfitting risk | High (needs walk-forward validation) | Moderate (discretization provides regularization) |
+| Interpretability | Easy (threshold = 0.55) | Hard (Q-values are opaque) |
+| Computation | Cheap (perturb + replay) | Cheap (table lookup + update) |
+
+Both run in parallel. The objective function (§2) evaluates which approach is driving better outcomes and weights decisions accordingly.
+
+---
+
+## §23 — Enhanced Risk Metrics
+
+### 23.1 Sortino Ratio
+
+The Sortino ratio is like Sharpe but only penalizes **downside** volatility. For trading, upside volatility is profit — we shouldn't penalize it.
+
+```
+Sortino = (R_p - R_f) / σ_d
+
+R_p = portfolio return
+R_f = risk-free rate (T-bill yield, ~4%)
+σ_d = downside deviation (stddev of negative returns only)
+```
+
+A Sortino > 2.0 is excellent. Added to the objective function (§2.2) at weight 0.15.
+
+### 23.2 Value at Risk (VaR)
+
+VaR answers: "What's the worst-case loss with 95% confidence over the next day?"
+
+```
+VaR_95 = μ - 1.645 × σ
+
+μ = mean daily return
+σ = stddev daily return
+1.645 = z-score for 95% confidence
+```
+
+Example: VaR_95 = -$150 means "we're 95% confident we won't lose more than $150 tomorrow."
+
+Used in the risk system (§5) as an additional gate: if VaR_95 exceeds 5% of portfolio, reduce position sizes.
+
+### 23.3 Risk Budget
+
+Each trader gets a risk budget: max 5% VaR per position, max 15% VaR across portfolio. The drawdown circuit breaker (§8) already covers catastrophic scenarios; VaR covers the normal-case worst day.
+
+---
+
+## §24 — Unsupervised Regime Detection
+
+### 24.1 K-Means Clustering for Market States
+
+The rule-based regime detector (§5) uses simple thresholds (ADX > 25, VIX > 25). This works but is rigid. K-Means clustering discovers natural market states from data:
+
+```
+Features per day:
+  - SPY daily return
+  - SPY 20-day rolling volatility
+  - VIX level
+  - Advance-decline ratio (NYSE)
+  - Sector correlation (avg pairwise corr of 11 sector ETFs)
+  - Volume relative to 20-day avg
+
+K = 4 clusters (matching our 4 regimes, but discovered from data)
+
+Nightly: recluster last 90 days of data
+Label clusters: which one performed best for momentum? For value?
+```
+
+### 24.2 PCA for Dimensionality Reduction
+
+The raw market data has hundreds of correlated features. PCA reduces to 3-5 principal components:
+
+```
+PC1: "risk-on/risk-off" axis (explains ~40% variance)
+PC2: "momentum/value" axis (explains ~20% variance)
+PC3: "volatility regime" axis (explains ~15% variance)
+```
+
+The LLM trader's context includes: "PC1 is at +1.2σ (risk-on), PC2 at -0.8σ (value over momentum)."
+
+### 24.3 Dual Regime Pipeline
+
+Both the rule-based (§5) and unsupervised (§24) regime detectors run in parallel. The objective function evaluates which produces better regime-tagged performance. Over time, the system may shift weight toward the better detector or ensemble them.
+
+---
+
+## §25 — Verification Scenarios (Additions)
+
+### RL-001: Q-Table Persistence
+- Given: trader with 50 state visits and learned Q-values
+- When: trader process restarts
+- Then: Q-table loads from disk with all 50 entries intact
+
+### RL-002: Q-Learning Convergence
+- Given: static market environment (replay mode)
+- When: 500 episodes of Q-Learning
+- Then: Q-values stabilize (max delta < 0.01 for 10 episodes)
+
+### SORTINO-001: Downside-Only Calculation
+- Given: returns = [+2%, +3%, -1%, +4%, -5%]
+- When: compute_sortino() is called
+- Then: only [-1%, -5%] contribute to downside deviation
+- And: [+2%, +3%, +4%] are excluded
+
+### VAR-001: Confidence Calculation
+- Given: daily returns with μ = 0.1%, σ = 1.5%
+- When: compute_var_95() is called
+- Then: VaR_95 ≈ -2.37% (μ - 1.645 × σ)
+
+### KMEANS-001: Cluster Discovery
+- Given: 90 days of market features
+- When: K-Means with K=4 is run
+- Then: 4 distinct clusters found
+- And: each day assigned to exactly one cluster
