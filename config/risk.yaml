@@ -3,7 +3,7 @@
 
 # ── Position Limits ───────────────────────────────────────────────────────────
 position:
-  max_position_pct: 0.10       # Max 10% of portfolio in single position
+  max_position_pct: 0.25       # Max 25% of portfolio in single position
   max_sector_pct: 0.30         # Max 30% in single sector
   max_total_exposure: 0.85     # Max 85% total exposure (leave 15% cash)
   max_positions: 12            # Max concurrent positions
@@ -16,7 +16,7 @@ drawdown:
 
 # ── Position Sizing ───────────────────────────────────────────────────────────
 sizing:
-  risk_per_trade_pct: 0.01     # 1% account risk per trade
+  risk_per_trade_pct: 0.02     # 2% account risk per trade
   min_position_value: 500      # Minimum $500 position
   max_position_value: 5000     # Maximum $5000 position (paper constraint)
 
@@ -29,7 +29,7 @@ stop_loss:
 
 # ── Risk Gates ────────────────────────────────────────────────────────────────
 gates:
-  require_conviction: 0.6      # Minimum conviction to enter trade (0.0–1.0)
+  require_conviction: 0.3      # Minimum conviction to enter trade (0.0–1.0)
   require_thesis: true         # Require written thesis for each trade
   max_correlated_bets: 3       # Max correlated positions (same sector/theme)
   vetos_before_force_hold: 3   # Consecutive vetos before forcing cash-only
