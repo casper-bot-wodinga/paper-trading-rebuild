@@ -327,6 +327,102 @@ Casper's OpenClaw agents clone and auto-pull this repo independently of the code
 
 ---
 
+## 12. Persistent Sessions Over Cron-Based Ticks for Market-Hours Trading
+
+**Date:** 2026-07-06
+**Status:** Accepted
+
+**Context:**
+Traders were running on cron-based isolated sessions: Kairos every 5 min, Stonks every 15 min, Aldridge every 30 min. Each tick cold-started a fresh session that had to re-mount tools, re-read prompt.txt, re-query the data bus, and re-learn portfolio state — 1-2 minutes of overhead before a single model thought. With deepseek-v4-pro and 180s timeouts, ticks were timing out at "model-call-started" phase — the model never finished generating. The cold-start overhead made sub-5-min cron intervals completely impractical.
+
+**Decision:**
+Replace cron-based ticks with persistent market-hours sessions. One session per trader that lives 9:30 AM → 4:00 PM ET. Each session owns an internal loop: check portfolio, scan the data bus, make ONE decision, execute/journal, sleep until the next interval. Crons remain as safety-net fallbacks (fire once at market open to spawn the persistent session, and once mid-day as a dead-man's switch).
+
+**Cold start overhead breakdown (measured on flash, worse on pro):**
+- Session init + tool mounting: ~10-20s
+- Read prompt + portfolio context: ~30-60s (re-reads every tick on cold start)
+- Model thinking: 1-5 min (pro model significantly slower)
+- Tool calls (data bus × 5): 30-60s
+- Output + execution: 10-20s
+
+Persistent sessions eliminate the first two phases entirely after the initial boot. The trader already knows its portfolio, its prompt, and what it tried last tick.
+
+**Benefits:**
+- Context preserved across ticks (knows it tried BAC, knows what got vetoed)
+- No cold start overhead
+- Can be more conversational/iterative within a session
+- Returns to Casper between ticks with quick updates
+
+**Trade-offs:**
+- Long-running sessions can drift/hallucinate after many turns → need circuit breaker (max 50 turns, force restart)
+- More complex to debug than stateless cron ticks
+- Session death mid-day = gap until next cron fallback fires
+
+**Refs:** OpenClaw agent sessions, Telegram conversation 2026-07-06 14:05
+
+---
+
+## 13. Risk Gate Must Mirror Prompt Thresholds — Single Source of Truth
+
+**Date:** 2026-07-06
+**Status:** Accepted (post-incident)
+
+**Context:**
+On 2026-07-06, Kairos submitted a BUY for BAC with thesis and signals_used correctly populated — following its new prompt to the letter (confidence ≥ 0.3, 2% sizing). The risk gate rejected it on three counts that the trader couldn't have anticipated:
+
+1. **Conviction gate: 0.6 required** (prompt says 0.3) — half of valid trades silently fail
+2. **Position cap: 10%** — 10.1% was rejected as a rounding error
+3. **Risk per trade: 1%** (prompts say 2%) — positions half the intended size
+
+The trader was operating with one set of rules while the gate enforced another. This is invisible to the trader — it outputs what the prompt asks for, gets vetoed, and learns nothing about why. To the trader, "I did what you asked and it didn't work" — without knowing the gate moved the goalposts.
+
+**Decision:**
+The risk gate configuration (`config/risk.yaml`) is a DERIVATIVE of the trader prompts — not an independent policy. Any change to prompt confidence thresholds, position sizing, or stock universes MUST be accompanied by a corresponding update to risk.yaml. The two must stay in lockstep.
+
+**Enforcement:**
+- CI check: script that loads risk.yaml thresholds and prompt.txt thresholds, asserts they match
+- Pre-commit hook on `prompts/*.txt` changes: warn if risk.yaml hasn't been updated
+- Hermes watchdog: compares gate thresholds vs prompt thresholds at each watchdog tick, alerts on mismatch
+
+**Fixed values (2026-07-06):**
+| Parameter | Before (risk.yaml) | After | Matches prompt |
+|-----------|-------------------|-------|----------------|
+| Conviction floor | 0.6 | 0.3 | All prompts say 0.3 |
+| Position cap | 10% | 25% | $10K account → $2,500 trades possible |
+| Risk per trade | 1% | 2% | Kairos/Aldridge say 2%, Stonks says 2-3% |
+
+**Refs:** Telegram conversation 2026-07-06 13:57, commit 560df5f
+
+---
+
+## 14. Cron Inline Prompts Must Not Contradict Agent prompt.txt
+
+**Date:** 2026-07-06
+**Status:** Accepted (post-incident)
+
+**Context:**
+The Kairos cron's inline message said "TRADE MORE. LOOSER. Scan for new tickers: small/mid-cap momentum plays. Meme stocks, SPACs — all fair game." The agent's prompt.txt said "Start with KO, F, INTC, PFE, WBD, VZ, CSCO, HPQ, KHC, WBA — all under $40." The agent tried to buy BAC (~$107/share), well outside both universes. Worse, the inline message completely omitted the output format rules (thesis ≥ 20 chars, signals_used mandatory) — so the agent traded enthusiastically but with zero thesis and no signals.
+
+**Decision:**
+Cron inline prompts are TRIGGERS ONLY. They say: "Execute your trading routine. Follow your system prompt (prompt.txt). Remember: [output format rules]." They do NOT specify strategy, stock universe, entry rules, or sizing — those live in prompt.txt alone. The cron message is the nudge; the prompt is the instruction.
+
+**What cron messages look like now:**
+```
+Execute your trading routine. Follow your system prompt (prompt.txt) —
+it's the single source of truth. Remember: thesis MUST be 20+ chars,
+signals_used MUST have at least 1 entry, confidence ≥ 0.3. A HOLD
+with idle cash is a missed learning opportunity.
+```
+
+**Consequences:**
+- **Pro:** No conflicting instructions — prompt.txt is the sole strategy document.
+- **Pro:** Changing strategy requires editing ONE file (prompt.txt), not every cron job.
+- **Con:** The cron message can't override strategy for special situations (market crash, earnings day). Mitigated by: those conditions belong in prompt.txt as conditional rules.
+
+**Refs:** Telegram conversation 2026-07-06 13:56-13:57, crons e8aa0961/5132fc33/29277cad
+
+---
+
 ## Template for future entries
 
 ```markdown

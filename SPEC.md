@@ -105,6 +105,8 @@ These cannot be violated. All code and PRs are audited against them.
 7. **Out-of-sample validation**: No parameter change is accepted without validation on data the optimizer hasn't seen.
 8. **Idempotent ticks**: Running the same tick twice produces the same result. No side effects that depend on timing.
 9. **Bootstrap fast and small**: Every new trading agent or strategy begins with cheap stocks ($10-40 range), small positions (1-2% equity), low confidence thresholds (0.30), and permissive filters. The learning loop tightens parameters — not the starting prompt. A conservative start starves the optimizer of data. A loose start lets the optimizer discover what works, then narrow toward it. This applies to any new strategy we add (options, swing trading, sector rotation, etc.) — always begin noisy, let the data teach precision.
+10. **Risk gate mirrors prompts**: The risk gate configuration (`config/risk.yaml`) is a derivative of trader prompts, not an independent policy. Conviction thresholds, position caps, and sizing limits in the gate MUST match what the prompts tell traders. Changing one requires changing the other. CI enforces this — any prompt change that widens a gap between prompt rules and gate rules fails the build. The trader must never face a gate it can't see.
+11. **Cron is trigger, not instruction**: Cron inline messages are nudges — "Execute your routine. Follow your prompt." They do NOT specify strategy, stock universe, entry rules, or sizing. Those live in prompt.txt alone. Changing strategy requires editing prompt.txt, not every cron job. A cron message that contradicts prompt.txt is a spec violation.
 
 ---
 
@@ -216,9 +218,38 @@ Constraints:
 
 ## §4 — LLM Trader (Prompt-Evolved)
 
-### 4.1 Trader Decision Loop
+### 4.1 Trader Tick Architecture (Persistent Session + Cron Fallback)
 
-Every tick, the trader agent receives:
+**Primary: Persistent market-hours session.** One session per trader lives 9:30 AM → 4:00 PM ET. The session owns an internal loop: check portfolio, scan data bus, make ONE decision, execute/journal, sleep until next interval.
+
+**Intervals per trader:**
+| Trader | Interval | Why |
+|--------|----------|-----|
+| Kairos | 90s | Momentum — fast, needs fresh data |
+| Stonks | 4min | Sentiment — takes time to scan Reddit/Bluesky |
+| Aldridge | 9min | Value — deliberate, fewer ticks needed |
+
+**Safety net: Crons as fallback only.** Crons fire at market open (9:30 AM ET) to spawn the persistent session, and every 30 min thereafter as a dead-man's switch. If the persistent session dies mid-day, the next cron tick catches it. Under normal operation, cron ticks detect the existing session and no-op. Only one session per trader runs at a time.
+
+**Cold start overhead (why crons alone fail):**
+| Phase | Overhead per tick (cold) | Overhead (persistent) |
+|-------|-------------------------|----------------------|
+| Session init + tool mounting | 10-20s | 0s (already mounted) |
+| Read prompt + portfolio context | 30-60s | 0s (context preserved) |
+| Model thinking | 1-5 min | 1-3 min (knows what it tried) |
+| Tool calls (data bus × 5) | 30-60s | 15-30s (incremental) |
+| Output + execution | 10-20s | 10-20s |
+| **Total** | **2-7 min** | **1.5-4 min** |
+
+Cold-start overhead was the root cause of the 2026-07-06 timeout cascade: each tick spent 1-2 minutes bootstrapping before the model even started thinking. With 180s timeouts and the pro model, ticks never completed. Persistent sessions eliminate this entirely.
+
+**Circuit breaker:** Max 50 turns per session. After 50, the session self-terminates and the next cron tick spawns a fresh one. This prevents long-session drift and hallucination.
+
+**Volume filter (relaxed):** 1.2x avg volume (was 2x). Missing an entry is worse than a false alarm in learning mode. The nightly sweep tightens this if it finds unprofitable entries at the relaxed threshold.
+
+### 4.2 Trader Decision Loop
+
+Each tick (within the persistent session or cron fallback), the trader agent receives:
 
 1. **Signal report**: Structured output from signal engine (momentum scores, RSI, regime, position sizing recommendations)
 2. **Portfolio state**: Positions, cash, P&L, current drawdown
@@ -238,7 +269,7 @@ The agent must output:
 }
 ```
 
-### 4.2 Prompt Structure
+### 4.3 Prompt Structure
 
 ```
 You are {trader_name}, a paper trading agent.
@@ -263,7 +294,7 @@ Make a trading decision. You CAN override the signal engine if your analysis dis
 If you override, explain why.
 ```
 
-### 4.3 Nightly Prompt Sweep
+### 4.4 Nightly Prompt Sweep
 
 After market close (16:00 ET):
 
