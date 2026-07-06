@@ -1,0 +1,37 @@
+name: Auto-merge on green CI
+
+# When a PR's checks pass, auto-merge if the author is casper-bot-wodinga
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  auto-merge:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find and auto-merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Get the PR number associated with this workflow run
+          PR_NUMBER=$(gh pr list --head "${{ github.event.workflow_run.head_branch }}" --json number --jq '.[0].number')
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found for branch ${{ github.event.workflow_run.head_branch }}"
+            exit 0
+          fi
+
+          # Check if PR author is casper-bot
+          AUTHOR=$(gh pr view "$PR_NUMBER" --json author --jq '.author.login')
+
+          if [ "$AUTHOR" != "casper-bot-wodinga" ]; then
+            echo "PR #$PR_NUMBER author is $AUTHOR, not casper-bot-wodinga — skipping auto-merge"
+            exit 0
+          fi
+
+          echo "Enabling auto-merge for PR #$PR_NUMBER (author: $AUTHOR)"
+          gh pr merge "$PR_NUMBER" --auto --squash --delete-branch
