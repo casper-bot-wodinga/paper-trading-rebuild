@@ -104,6 +104,7 @@ These cannot be violated. All code and PRs are audited against them.
 6. **Ground truth is P&L**: All improvement is measured by realized P&L outcomes. Heuristic scores are diagnostic only, never the optimization target.
 7. **Out-of-sample validation**: No parameter change is accepted without validation on data the optimizer hasn't seen.
 8. **Idempotent ticks**: Running the same tick twice produces the same result. No side effects that depend on timing.
+9. **Bootstrap fast and small**: Every new trading agent or strategy begins with cheap stocks ($10-40 range), small positions (1-2% equity), low confidence thresholds (0.30), and permissive filters. The learning loop tightens parameters — not the starting prompt. A conservative start starves the optimizer of data. A loose start lets the optimizer discover what works, then narrow toward it. This applies to any new strategy we add (options, swing trading, sector rotation, etc.) — always begin noisy, let the data teach precision.
 
 ---
 
