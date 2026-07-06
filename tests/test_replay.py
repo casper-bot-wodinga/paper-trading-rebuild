@@ -314,6 +314,84 @@ class TestReplayHarnessConviction:
         assert len(result.trades) == 0  # open position, not closed yet
         assert result.final_equity != 100_000  # invested
 
+    def test_sell_bypasses_conviction_gate(self):
+        """SELL orders (stop-loss, take-profit) must bypass the conviction gate.
+
+        The conviction gate is for entry decisions (BUY).  Exit decisions
+        are risk management and must never be blocked by conviction.
+        """
+        ticks = make_deterministic_uptrend_ticks(
+            n=20, start_price=100.0, step_pct=0.01,
+        )
+
+        # Stage 1: buy on tick 0
+        # Stage 2: sell on tick 1 with low conviction (simulating stop-loss)
+        buy_done = [False]
+
+        def buy_then_sell_low_conviction(tick: Tick, portfolio: Portfolio) -> TraderDecision:
+            ticker = tick.ticker
+            if not buy_done[0]:
+                buy_done[0] = True
+                return TraderDecision(
+                    ticker=ticker, decision="BUY", conviction=1.0,
+                )
+            if ticker in portfolio.positions:
+                # Simulate a stop-loss/take-profit exit with LOW conviction
+                return TraderDecision(
+                    ticker=ticker, decision="SELL", conviction=0.1,
+                    rationale="Stop loss hit (low conviction from signal engine)",
+                    signal_override=True,
+                )
+            return TraderDecision(ticker=ticker, decision="HOLD", conviction=0.0)
+
+        harness = ReplayHarness(
+            initial_balance=100_000, require_conviction=0.5,
+        )
+        result = harness.run(ticks, buy_then_sell_low_conviction)
+
+        # The SELL MUST complete — it's risk management
+        assert len(result.trades) == 1, (
+            f"Expected 1 closed trade, got {len(result.trades)}. "
+            "SELL (stop-loss/take-profit) must not be blocked by conviction gate."
+        )
+        assert result.trades[0].decision == "SELL"
+
+    def test_stop_loss_sell_not_blocked_by_conviction(self):
+        """End-to-end: SELL triggered by stop-loss must execute even when
+        signal conviction is low (e.g., during a crash)."""
+        ticks = make_deterministic_uptrend_ticks(
+            n=10, start_price=100.0, step_pct=0.005,
+        )
+
+        # Buy first, then force a SELL with zero conviction (worst case)
+        staged = {"bought": False}
+
+        def trader(tick: Tick, portfolio: Portfolio) -> TraderDecision:
+            ticker = tick.ticker
+            if not staged["bought"]:
+                staged["bought"] = True
+                return TraderDecision(
+                    ticker=ticker, decision="BUY", conviction=1.0,
+                )
+            if ticker in portfolio.positions:
+                return TraderDecision(
+                    ticker=ticker, decision="SELL", conviction=0.0,
+                    rationale="Emergency exit",
+                    signal_override=True,
+                )
+            return TraderDecision(ticker=ticker, decision="HOLD", conviction=0.0)
+
+        harness = ReplayHarness(
+            initial_balance=100_000, require_conviction=0.3,
+        )
+        result = harness.run(ticks, trader)
+
+        # Even with zero conviction, SELL must execute
+        assert len(result.trades) == 1, (
+            f"Expected 1 trade, got {len(result.trades)}. "
+            "SELL with zero conviction must still execute."
+        )
+
 
 class TestReplayHarnessEdgeCases:
     """Edge cases and error handling."""

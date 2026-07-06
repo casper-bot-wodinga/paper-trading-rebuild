@@ -256,14 +256,26 @@ class ReplayHarness:
         self._tickers_seen = []
 
     def _execute(self, tick: Tick, decision: TraderDecision) -> None:
-        """Simulate fill at close price."""
+        """Simulate fill at close price.
+
+        Conviction gating only applies to BUY (entry) decisions.
+        SELL orders are risk management / exit decisions and always
+        pass through — stop-loss and take-profit must never be blocked.
+        """
         if decision.decision == "HOLD":
             return
 
-        if decision.conviction < self.require_conviction:
-            log.debug("Decision blocked: conviction %.2f < required %.2f",
+        if decision.decision == "BUY" and decision.conviction < self.require_conviction:
+            log.debug("BUY blocked: conviction %.2f < required %.2f",
                       decision.conviction, self.require_conviction)
             return
+
+        if decision.signal_override and decision.conviction < self.require_conviction:
+            log.debug(
+                "Decision passed via signal_override (conviction %.2f < required %.2f)",
+                decision.conviction,
+                self.require_conviction,
+            )
 
         price = tick.close
 

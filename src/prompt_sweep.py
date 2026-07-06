@@ -646,7 +646,7 @@ def make_signal_trader(params: SignalParams) -> Callable[[Tick, Portfolio], Trad
         if tick.ticker in portfolio.positions:
             pos = portfolio.positions[tick.ticker]
 
-            # Check stop loss
+            # Check stop loss — risk management, always allowed
             if tick.close <= report.stop_loss:
                 return TraderDecision(
                     ticker=tick.ticker,
@@ -654,9 +654,10 @@ def make_signal_trader(params: SignalParams) -> Callable[[Tick, Portfolio], Trad
                     conviction=report.conviction,
                     rationale=f"Stop loss hit at {tick.close:.2f}",
                     shares=pos.shares,
+                    signal_override=True,
                 )
 
-            # Check take profit
+            # Check take profit — risk management, always allowed
             if tick.close >= report.take_profit:
                 return TraderDecision(
                     ticker=tick.ticker,
@@ -664,6 +665,7 @@ def make_signal_trader(params: SignalParams) -> Callable[[Tick, Portfolio], Trad
                     conviction=report.conviction,
                     rationale=f"Take profit at {tick.close:.2f}",
                     shares=pos.shares,
+                    signal_override=True,
                 )
 
             return TraderDecision(
