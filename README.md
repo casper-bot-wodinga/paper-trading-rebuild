@@ -2,12 +2,13 @@
 
 Clean-slate, spec-driven rebuild of the paper trading system. Green CI from commit 1.
 
-## Architecture
+## Spec
 
-- **Spec**: [SPEC-v2.md](SPEC-v2.md) — 8 architectural invariants, test scenarios
-- **Config**: Isolated per-component YAML configs
-- **CI**: All tests run, no skip lists, no ignores
-- **Learning Loop**: Traders self-improve via parameter tuning, prompt evolution, code changes
+**[SPEC.md](SPEC.md)** — canonical specification. Three AI traders (Kairos, Aldridge, Stonks) that measurably improve over time through two-speed learning, validated by rigorous out-of-sample testing, running on distributed hardware.
+
+- Purpose, architecture, components, and verification criteria
+- 25 sections covering signal engine, LLM trader, RL, regime detection, risk, and more
+- 20+ verification scenarios with acceptance criteria
 
 ## Phases
 

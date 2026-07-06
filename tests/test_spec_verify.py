@@ -1,4 +1,4 @@
-"""Spec verification tests. One test per scenario in SPEC-v2.verify.md."""
+"""Spec verification tests. One test per verification scenario in SPEC.md."""
 import pytest
 
 class TestArchitecture:

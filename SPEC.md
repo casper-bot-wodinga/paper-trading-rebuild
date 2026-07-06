@@ -1,8 +1,20 @@
-# SPEC-v3: Self-Improving Paper Trading System
+# SPEC: Self-Improving Paper Trading System
 
-> **Status:** Design phase — not yet built. Supersedes SPEC-v2.
+> **Status:** Design phase — not yet built. This is the canonical spec (consolidated from SPEC-v3).
 > **Goal:** Three AI traders (Kairos, Aldridge, Stonks) that measurably improve over time through two-speed learning, validated by rigorous out-of-sample testing, running on distributed hardware.
 > **Success criterion:** 90-day rolling Calmar ratio > SPY buy-and-hold, with max drawdown < 15%.
+
+> **META-SPEC compliance:** This document satisfies the META-SPEC structure:
+> - **Purpose** — see below
+> - **Architecture** — §1
+> - **Components** — §§2–24
+> - **Verification** — §§20, 25 (inline verification scenarios)
+
+---
+
+## Purpose
+
+Build a self-improving paper trading system where three AI traders measurably get better over time — validated by out-of-sample testing — and provide a platform for experimenting with multi-speed learning, prompt evolution, and distributed compute.
 
 ---
 
@@ -769,7 +781,7 @@ Step 10: Agent Journal
 ## §19 — Phased Implementation
 
 ### Phase 0: Foundation (✅ Done)
-- Clean repo, green CI, SPEC-v3 (this document)
+- Clean repo, green CI, SPEC.md (this document)
 - Placeholder test, config skeletons
 
 ### Phase 1: Config Isolation + Signal Engine
