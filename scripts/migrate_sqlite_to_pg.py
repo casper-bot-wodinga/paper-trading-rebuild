@@ -52,6 +52,7 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
             "status": "status",
             "decision_id": "decision_id",
             "entry_reason": "entry_reason",
+            "stop_loss": "stop_loss",
         },
         "on_conflict": "DO NOTHING",
     },

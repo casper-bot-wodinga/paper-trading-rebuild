@@ -10,6 +10,9 @@ Now syncs from Alpaca's /positions endpoint — the source of truth for "what do
 I currently hold?" If Alpaca says you have it, DB says open. If Alpaca says
 you don't, DB says closed.
 
+v3 FIX (#42): Every BUY now writes stop_loss = entry_price * (1 - DEFAULT_STOP_LOSS_PCT).
+Previously stop_loss was never populated, leaving all positions unprotected.
+
 Usage:
     python3 src/sync_trades.py --agent kairos
     python3 src/sync_trades.py --all
@@ -27,6 +30,9 @@ from dotenv import load_dotenv
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SHARED_DB = PROJECT_DIR / "shared" / "trader.db"
+
+# Default stop-loss as percentage of entry price (from config/risk.yaml)
+DEFAULT_STOP_LOSS_PCT = 0.05  # 5%
 
 load_dotenv(Path.home() / ".openclaw" / ".env", override=True)
 local_env = PROJECT_DIR / ".env"
@@ -96,11 +102,16 @@ def get_alpaca_positions(api_key: str, secret_key: str) -> list[dict]:
         return []
 
 
+def _compute_stop_loss(entry_price: float) -> float:
+    """Compute stop-loss price from entry price and default percentage."""
+    return round(entry_price * (1.0 - DEFAULT_STOP_LOSS_PCT), 2)
+
+
 def sync_positions(conn, agent_id: str, api_key: str, secret_key: str, dry_run: bool = False):
     """Sync: Alpaca positions → trades table.
 
     For each Alpaca position:
-      - If no matching open BUY trade exists, create one.
+      - If no matching open BUY trade exists, create one (with stop_loss).
       - If a matching open BUY trade exists, update qty/entry_price if changed.
 
     For each DB trade marked 'open':
@@ -134,6 +145,7 @@ def sync_positions(conn, agent_id: str, api_key: str, secret_key: str, dry_run: 
         alpaca_symbols.add(sym)
         qty = pos["qty"]
         entry = pos["avg_entry_price"]
+        stop_loss = _compute_stop_loss(entry)
 
         if sym in open_trades:
             trade = open_trades[sym]
@@ -141,8 +153,8 @@ def sync_positions(conn, agent_id: str, api_key: str, secret_key: str, dry_run: 
             if abs(trade["qty"] - qty) > 0.001 or abs(trade["entry_price"] - entry) > 0.01:
                 if not dry_run:
                     cur.execute(
-                        "UPDATE trades SET quantity = ?, entry_price = ?, updated_at = ? WHERE id = ?",
-                        (qty, entry, now, trade["id"]),
+                        "UPDATE trades SET quantity = ?, entry_price = ?, stop_loss = ?, updated_at = ? WHERE id = ?",
+                        (qty, entry, stop_loss, now, trade["id"]),
                     )
                 print(f"[sync_trades] {agent_id}: updated {sym} qty={trade['qty']}→{qty} entry={trade['entry_price']}→{entry}")
                 updated += 1
@@ -162,23 +174,23 @@ def sync_positions(conn, agent_id: str, api_key: str, secret_key: str, dry_run: 
                            entry_timestamp = ?, status = 'open',
                            exit_price = NULL, exit_timestamp = NULL,
                            exit_reason = NULL, pnl = NULL, pnl_pct = NULL,
-                           updated_at = ?
+                           stop_loss = ?, updated_at = ?
                            WHERE id = ?""",
-                        (qty, entry, now, now, closed_trade[0]),
+                        (qty, entry, now, stop_loss, now, closed_trade[0]),
                     )
-                print(f"[sync_trades] {agent_id}: reopened closed trade for {sym} x{qty} @ ${entry:.2f}")
+                print(f"[sync_trades] {agent_id}: reopened closed trade for {sym} x{qty} @ ${entry:.2f} (stop=${stop_loss:.2f})")
                 created += 1
             else:
-                # New position — create open BUY trade
+                # New position — create open BUY trade with stop_loss
                 if not dry_run:
                     cur.execute(
                         """INSERT INTO trades
                            (agent_id, timestamp, decision_id, ticker, action, quantity,
-                            entry_price, entry_reason, entry_timestamp, status, updated_at)
-                           VALUES (?, ?, 0, ?, 'buy', ?, ?, 'position_sync', ?, 'open', ?)""",
-                        (agent_id, now, sym, qty, entry, now, now),
+                            entry_price, entry_reason, entry_timestamp, status, stop_loss, updated_at)
+                           VALUES (?, ?, 0, ?, 'buy', ?, ?, 'position_sync', ?, 'open', ?, ?)""",
+                        (agent_id, now, sym, qty, entry, now, stop_loss, now),
                     )
-                print(f"[sync_trades] {agent_id}: created open trade for {sym} x{qty} @ ${entry:.2f}")
+                print(f"[sync_trades] {agent_id}: created open trade for {sym} x{qty} @ ${entry:.2f} (stop=${stop_loss:.2f})")
                 created += 1
 
     # Close any DB trades that are no longer in Alpaca positions

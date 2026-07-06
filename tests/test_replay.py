@@ -528,3 +528,47 @@ def test_replay_to_objective_score():
     # (unless max drawdown > 15%, which it shouldn't in a clean uptrend)
     assert isinstance(score, float)
     assert score > 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stop-loss assertion tests (#42)
+# Every BUY trade must write stop_loss. Default = entry_price * 0.95 (5% stop).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestStopLossComputation:
+    """Verify stop_loss computation used by sync_trades.py."""
+
+    def test_stop_loss_default_5pct(self):
+        """Stop-loss = entry_price * (1 - 0.05), rounded to 2 decimals."""
+        from src.sync_trades import _compute_stop_loss, DEFAULT_STOP_LOSS_PCT
+
+        assert DEFAULT_STOP_LOSS_PCT == 0.05
+
+        # Round numbers
+        assert _compute_stop_loss(100.0) == 95.0
+        assert _compute_stop_loss(200.0) == 190.0
+        assert _compute_stop_loss(50.0) == 47.5
+
+        # Precise numbers from real trades
+        assert _compute_stop_loss(198.795143) == 188.86  # ADBE
+        assert _compute_stop_loss(112.08) == 106.48       # HOOD
+        assert _compute_stop_loss(370.836667) == 352.29   # MSFT
+
+    def test_stop_loss_always_below_entry(self):
+        """Stop-loss must be strictly below entry price (positive stop_loss_pct)."""
+        from src.sync_trades import _compute_stop_loss
+
+        for entry in [10.0, 50.0, 100.0, 250.0, 500.0]:
+            stop = _compute_stop_loss(entry)
+            assert stop < entry, f"stop_loss={stop} >= entry={entry}"
+            # Should be roughly 5% below
+            assert abs((entry - stop) / entry - 0.05) < 0.001
+
+    def test_stop_loss_never_negative(self):
+        """Stop-loss should never go below zero even for tiny entry prices."""
+        from src.sync_trades import _compute_stop_loss
+
+        assert _compute_stop_loss(1.0) == 0.95
+        assert _compute_stop_loss(0.05) == 0.05  # rounds to nearest 0.01
+        assert _compute_stop_loss(0.001) == 0.0  # rounds down
