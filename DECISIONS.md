@@ -291,6 +291,42 @@ signals triggered this BUY.
 
 ---
 
+## 11. Separate Prompts Repo
+
+**Date:** 2026-07-06
+**Decision by:** Hermes
+**Status:** Accepted
+
+**Context:**
+Prompts were originally stored alongside code in `paper-trading-rebuild/prompts/`. But prompts evolve at a different cadence (nightly automated sweeps → auto-promote via two-phase validation) while code changes go through PR review. Mixing them in the same repo means: automated prompt commits pollute code history, every prompt push triggers CI that doesn't test prompts, and Casper's OpenClaw agents get code changes mixed with prompt changes when they `git pull`.
+
+**Decision:**
+Create `Tesselation-Studios/paper-trading-prompts` — a standalone repo containing only trader prompts and their changelogs. The rebuild repo retains the prompt files as a copy (for reference and sweep tooling) but the source of truth is the prompts repo.
+
+**Structure:**
+```
+kairos/prompt.txt + changelog.md
+aldridge/prompt.txt + changelog.md
+stonks/prompt.txt + changelog.md
+```
+
+Casper's OpenClaw agents clone and auto-pull this repo independently of the codebase. Nightly sweeps commit directly to this repo when a prompt variant passes both validation phases.
+
+**Alternatives considered:**
+- **Keep prompts in rebuild repo:** Rejected — mixing cadences creates noise and unnecessary CI runs.
+- **Git submodules:** Rejected — submodules add complexity for no benefit. Casper can clone two repos.
+- **Store prompts in a DB:** Rejected — prompts are text files. Git versioning with changelogs is the right tool.
+
+**Consequences:**
+- **Pro:** Clean separation — code repo = platform, prompts repo = strategy.
+- **Pro:** No CI noise — prompt commits don't trigger code CI.
+- **Pro:** Independent evolution — Casper auto-pulls prompts; human-reviewed PRs gate code changes.
+- **Con:** Coupling risk — a code change that requires a prompt format change must be coordinated across two repos. Mitigated by versioning the output format in the prompt repo README and adding backward compat in the parser.
+
+**Refs:** https://github.com/Tesselation-Studios/paper-trading-prompts
+
+---
+
 ## Template for future entries
 
 ```markdown
