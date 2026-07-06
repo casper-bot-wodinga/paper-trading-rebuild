@@ -107,6 +107,8 @@ These cannot be violated. All code and PRs are audited against them.
 9. **Bootstrap fast and small**: Every new trading agent or strategy begins with cheap stocks ($10-40 range), small positions (1-2% equity), low confidence thresholds (0.30), and permissive filters. The learning loop tightens parameters — not the starting prompt. A conservative start starves the optimizer of data. A loose start lets the optimizer discover what works, then narrow toward it. This applies to any new strategy we add (options, swing trading, sector rotation, etc.) — always begin noisy, let the data teach precision.
 10. **Risk gate mirrors prompts**: The risk gate configuration (`config/risk.yaml`) is a derivative of trader prompts, not an independent policy. Conviction thresholds, position caps, and sizing limits in the gate MUST match what the prompts tell traders. Changing one requires changing the other. CI enforces this — any prompt change that widens a gap between prompt rules and gate rules fails the build. The trader must never face a gate it can't see.
 11. **Cron is trigger, not instruction**: Cron inline messages are nudges — "Execute your routine. Follow your prompt." They do NOT specify strategy, stock universe, entry rules, or sizing. Those live in prompt.txt alone. Changing strategy requires editing prompt.txt, not every cron job. A cron message that contradicts prompt.txt is a spec violation.
+12. **Decision quality gates are warning-only during bootstrap**: During the first 30 closed trades or until portfolio reaches +5% equity, the thesis/signals_used/exit_condition requirements downgrade from VETO (reject trade) to WARNING (log and proceed). We need data more than we need format correctness. After bootstrap completes, the gate upgrades to VETO — format is mandatory once there's a track record to protect.
+13. **Cron timeout must exceed model inference time**: The slowest call in any tick pipeline (LLM inference) must fit within the cron timeout with 3× buffer. A 180s timeout with a reasoning model that takes 120s+ is guaranteed failure. Minimum: model's P99 latency × 3. Kairos runs on flash (fast), Aldridge on pro (slow → needs 600s timeout), Stonks on flash.
 
 ---
 
@@ -1603,3 +1605,59 @@ All of the above are implemented in:
 - `src/signals.py` — `SignalParams.relaxed_sweep()` and `aggressive()` factory methods
 - `src/simulator.py` — Pre-warm in `run_scenario`, auto-relax in `run_sweep`
 - `scripts/night_pipeline_v2.py` — Three-phase pipeline with auto-relax loop
+
+---
+
+## §30 — Operational Hygiene (learned Jul 6, 2026)
+
+Lessons from the first bootstrap attempt where zero trades executed across 10+ days.
+
+### 30.1 Prompt Deployment Path
+
+The traders run inside OpenClaw workspaces. They read:
+- `AGENTS.md` — operational workflow + output format
+- `skills/persona-strategy/SKILL.md` — strategic identity
+
+The `prompts/*.txt` files in `paper-trading-prompts` are the **source of truth**, but they must be deployed TO the workspace files. The deployment path is:
+
+```
+paper-trading-prompts/kairos/prompt.txt
+    → openclaw@.41:~/.openclaw/workspace-trader-kairos/AGENTS.md (output format section)
+    → openclaw@.41:~/.openclaw/workspace-trader-kairos/skills/persona-strategy/SKILL.md (strategy)
+```
+
+**Invariant:** After any prompt change, verify the workspace files match. A beautiful prompt in git that the trader never reads is dead code.
+
+### 30.2 Cron Hygiene
+
+Cron jobs that trigger trader ticks have two layers:
+1. The cron schedule and timeout
+2. An optional inline prompt that overrides the system prompt
+
+**Rules:**
+- **Inline prompts MUST preserve format rules.** "TRADE MORE. LOOSER." without "thesis 20+ chars, signals_used mandatory" causes risk veto cascades.
+- **Inline prompts should be minimal.** Preferred: "Follow your system prompt (AGENTS.md). Remember: thesis 20+ chars, signals_used mandatory."
+- **No duplicate crons per trader.** One cron firing at overlapping times with another = double-inference, conflicting prompts, or broken delivery.
+- **Cron timeout ≥ model P99 × 3.** A reasoning model at 120s/call with a 180s timeout = guaranteed timeout. Flash models can use 300s; pro models need 600s.
+
+### 30.3 Intraday Monitoring Split
+
+Hermes and Casper split intraday monitoring to avoid gaps:
+
+| Slot | Owner | Schedule |
+|------|-------|----------|
+| 9:30, 11:30, 1:30, 3:30 ET | Hermes | Odd hours |
+| 10:00, 12:00, 2:00 ET | Casper | Even hours |
+
+Both monitor all three traders and attempt to fix — not just report. The watchdog checks: stale decisions (all HOLDs), journal freshness, risk state warnings, thesis quality, model timeout patterns.
+
+### 30.4 Bootstrap Risk Gates
+
+During bootstrap (first 30 closed trades or +5% equity, whichever comes first):
+
+- **thesis**: WARNING only. Log empty thesis, proceed with trade. After bootstrap: VETO (<20 chars = reject).
+- **signals_used**: WARNING only. Log missing signals, proceed. After bootstrap: VETO (empty array = reject).
+- **exit_condition**: WARNING only. Default to "time_stop" if missing. After bootstrap: VETO.
+- **holding_horizon_days**: Default to 5 if missing during bootstrap. After bootstrap: VETO.
+
+This prevents the death spiral where: traders are too conservative → don't trade → when they finally try, risk veto rejects → still no trades → still no data → traders stay conservative. The bootstrap gate breaks this cycle by letting noisy trades through. Format correctness is valuable but secondary to having data to optimize against.
