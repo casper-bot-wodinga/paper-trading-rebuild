@@ -50,7 +50,7 @@ These bugs prevent live trading from functioning. No learning loop can run witho
 | # | Issue | Owner | Blocked? | Action |
 |---|-------|-------|----------|--------|
 | — | **Casper: Stonks pipeline silence** — not producing signals, no trades for days | Casper | Nothing | Investigate Stonks cron; check sentiment API connectivity; verify OpenClaw session alive |
-| **53** | Volume filter blocks entries in CHOPPY + Extreme Fear regimes — traders can't act when they should | Hermes | Nothing | Fix `src/signals.py` volume filter: CHOPPY + F&G ≤ 30 should bypass volume threshold per Kairos prompt rules |
+| **53** | Volume filter blocks entries in CHOPPY + Extreme Fear regimes — traders can't act when they should | Hermes | Nothing | ✅ Fixed in `63eeb03`. Volume filter now bypasses when MEAN_REVERTING + F&G ≤ 30. `volume_ratio` + `volume_pass` in SignalReport. |
 | **45** | Entry gate blocking sell orders — risk gate rejects SELL decisions | Hermes | Nothing | Fix `src/risk/gates.py`: entry gate should only gate BUY, not SELL |
 
 ### Aldridge — Stop-Loss
@@ -187,7 +187,7 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 ## 🎯 Next Actions (Tonight / Tomorrow)
 
 ### Hermes — Immediate (P0)
-- [ ] Fix #53: Volume filter bypass in CHOPPY + Extreme Fear (`src/signals.py`)
+- [x] Fix #53: Volume filter bypass in CHOPPY + Extreme Fear (`src/signals.py`) ✅ `63eeb03`
 - [ ] Fix #45: Entry gate should allow SELL (`src/risk/gates.py`)
 - [ ] Fix #42: Backfill ADBE stop-loss; add assertion
 - [ ] Fix #28: Diff schema.sql vs live Postgres, generate migration
