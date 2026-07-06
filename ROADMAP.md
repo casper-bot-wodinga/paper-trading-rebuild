@@ -57,7 +57,7 @@ These bugs prevent live trading from functioning. No learning loop can run witho
 
 | # | Issue | Owner | Blocked? | Action |
 |---|-------|-------|----------|--------|
-| **42** | ADBE missing stop-loss in DB — Aldridge entered without stop, no protection | Hermes | Nothing | Backfill stop-loss for ADBE position; add assertion that every BUY writes stop-loss |
+| **42** | ADBE missing stop-loss in DB — Aldridge entered without stop, no protection | Hermes | Nothing | ✅ Fixed `7b34ecb`. Backfilled 24 open trades (22 Aldridge + 2 Stonks) with 5% stop-loss. Fixed sync_trades.py to always write stop_loss on BUY. 3 new tests. |
 | — | **Casper: Aldridge stop-loss not wired up** — stop-loss checks not running on OpenClaw side | Casper | Nothing | Wire stop-loss monitoring into Aldridge heartbeat; Hermes can only enforce at risk-gate level |
 
 ---
@@ -189,7 +189,7 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 ### Hermes — Immediate (P0)
 - [x] Fix #53: Volume filter bypass in CHOPPY + Extreme Fear (`src/signals.py`) ✅ `63eeb03`
 - [x] Fix #45: Entry gate should allow SELL (`src/risk/gates.py`) ✅ `b6cddb5`
-- [ ] Fix #42: Backfill ADBE stop-loss; add assertion
+- [x] Fix #42: Backfill ADBE stop-loss; add assertion ✅ `7b34ecb`
 - [ ] Fix #28: Diff schema.sql vs live Postgres, generate migration
 
 ### Hermes — After P0
