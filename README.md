@@ -110,7 +110,7 @@ specs/
 infra/
   docker/                  ← Docker Compose for Postgres + workers
 
-SPEC-v3.md                 ← Master design spec
+SPEC.md                    ← Master design spec
 ```
 
 ---

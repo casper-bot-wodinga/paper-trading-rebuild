@@ -784,7 +784,7 @@ Step 10: Agent Journal
 ## §19 — Phased Implementation
 
 ### Phase 0: Foundation (✅ Done)
-- Clean repo, green CI, SPEC-v3 (this document)
+- Clean repo, green CI, SPEC.md (this document)
 - Placeholder test, config skeletons
 
 ### Phase 1: Config Isolation + Signal Engine
