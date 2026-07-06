@@ -53,7 +53,7 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
             "decision_id": "decision_id",
             "entry_reason": "entry_reason",
         },
-        "on_conflict": "(agent_id, ticker, entry_time) DO NOTHING",
+        "on_conflict": "DO NOTHING",
     },
     {
         "sqlite": "decisions",
@@ -118,7 +118,7 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
             "unrealized_pl": "unrealized_pl",
             "opened_at": "opened_at",
         },
-        "on_conflict": "(agent_id, ticker) DO UPDATE SET quantity=EXCLUDED.quantity, current_price=EXCLUDED.current_price, market_value=EXCLUDED.market_value, unrealized_pl=EXCLUDED.unrealized_pl",
+        "on_conflict": "DO NOTHING",
     },
     {
         "sqlite": "portfolio_snapshots",
@@ -180,6 +180,7 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
             "ticker": "ticker",
             "score": "overall_sentiment",
             "articles_count": "mention_count",
+            "source": "sources",
             "fetched_at": "fetched_at",
         },
         "on_conflict": "DO NOTHING",
