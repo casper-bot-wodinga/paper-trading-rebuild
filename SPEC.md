@@ -218,34 +218,76 @@ Constraints:
 
 ## §4 — LLM Trader (Prompt-Evolved)
 
-### 4.1 Trader Tick Architecture (Persistent Session + Cron Fallback)
+### 4.1 Trader Tick Architecture (Ephemeral Ticks + Persistent Heartbeat)
 
-**Primary: Persistent market-hours session.** One session per trader lives 9:30 AM → 4:00 PM ET. The session owns an internal loop: check portfolio, scan data bus, make ONE decision, execute/journal, sleep until next interval.
+**Trading decisions and reflection are different workloads. They run on different cadences, with different sessions.**
+
+#### Trading Ticks — Ephemeral, Zero Cold Start
+
+Each trading tick is a stateless cron job. A pre-tick script (`scripts/tick_prompt.py`) runs before the LLM is spawned:
+
+```
+Cron fires (e.g. */5 9-16 * * 1-5 for Kairos)
+  → scripts/tick_prompt.py --trader kairos
+    → reads prompts/kairos.txt (the template)
+    → hits data bus for live state (portfolio, quotes, regime, F&G, signals)
+    → templates everything into one complete prompt
+    → returns the prompt string
+  → Cron spawns agentTurn with the assembled prompt
+  → LLM receives fully-loaded context — first thought is about trading
+  → Outputs JSON: BUY/SELL/HOLD with thesis + signals
+  → Tick done. Session discarded.
+```
+
+**The LLM never touches a tool during a trading tick.** It doesn't read files, doesn't query APIs, doesn't check its portfolio. All context arrives pre-assembled. The cron message IS the complete prompt.
+
+**What's stable vs dynamic:**
+
+| Layer | Source | Changes |
+|-------|--------|---------|
+| Strategy, persona, stock universe, rules | `prompts/{trader}.txt` | Nightly via sweep |
+| Portfolio state, quotes, regime, F&G, signals | Data bus (live) | Every tick |
+| Output format (JSON schema) | Prompt template | Rarely (coordinated with risk gate) |
+| Journal context (last 5 entries) | Trader's journal DB | Every tick |
+
+**Prompt text is LOCKED during market hours.** The template (`prompts/{trader}.txt`) does not change between 9:30 AM and 4:00 PM ET. Changes only go live overnight after the sweep validates them. This means: a trader's strategy is consistent all day. If a trader thinks "I should change X," it writes that in its journal — the heartbeat session captures it — and Hermes reviews it in the evening.
 
 **Intervals per trader:**
-| Trader | Interval | Why |
-|--------|----------|-----|
-| Kairos | 90s | Momentum — fast, needs fresh data |
-| Stonks | 4min | Sentiment — takes time to scan Reddit/Bluesky |
-| Aldridge | 9min | Value — deliberate, fewer ticks needed |
+| Trader | Interval | Model | Thinking | Why |
+|--------|----------|-------|----------|-----|
+| Kairos | 5 min | flash | low | Momentum — needs fresh data, fast decisions |
+| Stonks | 15 min | flash | low | Sentiment — takes time to scan, gut feel |
+| Aldridge | 30 min | pro | medium | Value — deliberate, fewer ticks |
 
-**Safety net: Crons as fallback only.** Crons fire at market open (9:30 AM ET) to spawn the persistent session, and every 30 min thereafter as a dead-man's switch. If the persistent session dies mid-day, the next cron tick catches it. Under normal operation, cron ticks detect the existing session and no-op. Only one session per trader runs at a time.
+**Timeout:** 600s for all ticks. With no tool calls and pre-assembled context, typical completion is 30-90s. The 600s ceiling is a safety net, not the target.
 
-**Cold start overhead (why crons alone fail):**
-| Phase | Overhead per tick (cold) | Overhead (persistent) |
-|-------|-------------------------|----------------------|
-| Session init + tool mounting | 10-20s | 0s (already mounted) |
-| Read prompt + portfolio context | 30-60s | 0s (context preserved) |
-| Model thinking | 1-5 min | 1-3 min (knows what it tried) |
-| Tool calls (data bus × 5) | 30-60s | 15-30s (incremental) |
+#### Heartbeat / Journal Sessions — Persistent, Reflection Only
+
+Separate from trading ticks. Each trader has ONE persistent OpenClaw session that lives 9:30 AM → 4:00 PM ET. This session:
+
+- **Journaling**: Writes reflections after each trade or at regular intervals
+- **Learning**: "Here's what I noticed today. Here's what might improve."
+- **Proposing changes**: "My stock universe should add X. My conviction floor should be Y."
+- **Never executes trades**: The heartbeat session doesn't make BUY/SELL decisions
+
+Changes proposed in journals are reviewed overnight by Hermes + Casper. If approved, the prompt template (`prompts/{trader}.txt`) is updated and takes effect the next trading day. Prompts NEVER change mid-day.
+
+**Circuit breaker:** Max 50 turns per heartbeat session. After 50, self-terminates and respawns. Prevents long-session drift.
+
+#### Cold Start Overhead Eliminated
+
+The pre-tick script solves the cold start problem that made cron-based ticks impractical:
+
+| Phase | Before (cold cron) | After (pre-assembled prompt) |
+|-------|--------------------|------------------------------|
+| Session init + tool mounting | 10-20s | 0s (tools not needed) |
+| Read prompt + portfolio context | 30-60s | 0s (pre-assembled) |
+| Model thinking | 1-5 min | 10-30s (context is complete) |
+| Tool calls (data bus × 5) | 30-60s | 0s (data already in prompt) |
 | Output + execution | 10-20s | 10-20s |
-| **Total** | **2-7 min** | **1.5-4 min** |
+| **Total** | **2-7 min** | **20-50s** |
 
-Cold-start overhead was the root cause of the 2026-07-06 timeout cascade: each tick spent 1-2 minutes bootstrapping before the model even started thinking. With 180s timeouts and the pro model, ticks never completed. Persistent sessions eliminate this entirely.
-
-**Circuit breaker:** Max 50 turns per session. After 50, the session self-terminates and the next cron tick spawns a fresh one. This prevents long-session drift and hallucination.
-
-**Volume filter (relaxed):** 1.2x avg volume (was 2x). Missing an entry is worse than a false alarm in learning mode. The nightly sweep tightens this if it finds unprofitable entries at the relaxed threshold.
+The 2026-07-06 timeout cascade (5+ consecutive failures at 180s) was driven entirely by cold-start overhead. Pre-assembled prompts eliminate every phase except model thinking + output.
 
 ### 4.2 Trader Decision Loop
 

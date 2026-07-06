@@ -327,38 +327,46 @@ Casper's OpenClaw agents clone and auto-pull this repo independently of the code
 
 ---
 
-## 12. Persistent Sessions Over Cron-Based Ticks for Market-Hours Trading
+## 12. Ephemeral Pre-Assembled Trading Ticks + Persistent Heartbeat Sessions
 
 **Date:** 2026-07-06
-**Status:** Accepted
+**Status:** Accepted (revised at 14:35 from original persistent-session-only design)
 
 **Context:**
-Traders were running on cron-based isolated sessions: Kairos every 5 min, Stonks every 15 min, Aldridge every 30 min. Each tick cold-started a fresh session that had to re-mount tools, re-read prompt.txt, re-query the data bus, and re-learn portfolio state — 1-2 minutes of overhead before a single model thought. With deepseek-v4-pro and 180s timeouts, ticks were timing out at "model-call-started" phase — the model never finished generating. The cold-start overhead made sub-5-min cron intervals completely impractical.
+Traders were running on cron-based isolated sessions that cold-started every tick: re-mounting tools, re-reading prompt.txt, re-querying the data bus — 1-2 minutes of bootstrap overhead before the model started thinking. With deepseek-v4-pro and 180s timeouts, ticks timed out at "model-call-started." A persistent-session design (original #12) was proposed but Raf identified a cleaner split.
 
 **Decision:**
-Replace cron-based ticks with persistent market-hours sessions. One session per trader that lives 9:30 AM → 4:00 PM ET. Each session owns an internal loop: check portfolio, scan the data bus, make ONE decision, execute/journal, sleep until the next interval. Crons remain as safety-net fallbacks (fire once at market open to spawn the persistent session, and once mid-day as a dead-man's switch).
+Two distinct session types with different lifetimes and responsibilities:
 
-**Cold start overhead breakdown (measured on flash, worse on pro):**
-- Session init + tool mounting: ~10-20s
-- Read prompt + portfolio context: ~30-60s (re-reads every tick on cold start)
-- Model thinking: 1-5 min (pro model significantly slower)
-- Tool calls (data bus × 5): 30-60s
-- Output + execution: 10-20s
+**1. Trading Ticks — Ephemeral, pre-assembled, zero cold start:**
+A pre-tick script (`scripts/tick_prompt.py`) runs BEFORE the LLM is spawned. It reads `prompts/{trader}.txt` (the template), hits the data bus for live state, and templates everything into one complete prompt. The cron sends this fully-assembled prompt as the agentTurn message. The LLM receives a complete picture — portfolio, quotes, signals, regime, F&G — without making a single tool call. First thought is about trading. Session is discarded after the decision.
 
-Persistent sessions eliminate the first two phases entirely after the initial boot. The trader already knows its portfolio, its prompt, and what it tried last tick.
+**2. Heartbeat/Journal Sessions — Persistent, reflection only:**
+One persistent session per trader lives 9:30 AM → 4:00 PM ET. This session journals, reflects, proposes changes — but NEVER executes trades. Changes proposed in journals go to Hermes for overnight review.
 
-**Benefits:**
-- Context preserved across ticks (knows it tried BAC, knows what got vetoed)
-- No cold start overhead
-- Can be more conversational/iterative within a session
-- Returns to Casper between ticks with quick updates
+**Prompt change policy:**
+- **During market hours (9:30 AM → 4:00 PM ET):** Prompt templates are LOCKED. No changes.
+- **Overnight:** Hermes + Casper review journal proposals. Approved changes update `prompts/{trader}.txt`. Take effect next market open.
+- **Nightly sweep:** Tests prompt variants against historical data. Winners auto-promote to `prompts/{trader}.txt` if they pass both validation phases.
 
-**Trade-offs:**
-- Long-running sessions can drift/hallucinate after many turns → need circuit breaker (max 50 turns, force restart)
-- More complex to debug than stateless cron ticks
-- Session death mid-day = gap until next cron fallback fires
+**Cold start overhead eliminated:**
+| Phase | Before (cold cron) | After (pre-assembled prompt) |
+|-------|--------------------|------------------------------|
+| Session init + tool mounting | 10-20s | 0s (no tools needed) |
+| Read prompt + portfolio context | 30-60s | 0s (pre-assembled) |
+| Model thinking | 1-5 min | 10-30s (context is complete) |
+| Tool calls (data bus × 5) | 30-60s | 0s (data in prompt) |
+| Output + execution | 10-20s | 10-20s |
+| **Total** | **2-7 min** | **20-50s** |
 
-**Refs:** OpenClaw agent sessions, Telegram conversation 2026-07-06 14:05
+**Consequences:**
+- **Pro:** Trading ticks drop from 2-7 min to 20-50s. 5-min intervals actually work.
+- **Pro:** Clear separation of concerns — trading decisions vs reflection.
+- **Pro:** Prompts don't drift mid-day. Strategy is consistent within a trading session.
+- **Con:** Pre-tick script is new infrastructure. Must be fast (< 2s) and reliable.
+- **Con:** Journal proposals accumulate during the day and batch at review time. A good idea at 10 AM waits until evening.
+
+**Refs:** SPEC.md §4.1, Telegram conversation 2026-07-06 14:31-14:35
 
 ---
 
