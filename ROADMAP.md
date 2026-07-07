@@ -2,7 +2,7 @@
 
 > **Repo:** `Tesselation-Studios/paper-trading-rebuild`
 > **Board:** [GitHub Projects](https://github.com/users/casper-bot-wodinga/projects/2)
-> **Last updated:** 2026-07-08 (overnight — param_history fixes `f6927d9`, invariant #8 idempotency `2264188`, 780 tests green)
+> **Last updated:** 2026-07-08 (overnight — invariants #8 + #10 verified, 794 tests green, risk-prompt CI validator)
 > **Active profile:** Raf watching on Canvas — this is the single source of truth for what's being worked on.
 
 ---
@@ -196,6 +196,7 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] **Build after-hours format test**: `DecisionFormatValidator` + 97 tests ✅ `4d08179` — validates action, ticker, quantity, confidence, thesis, signals_used, exit_condition, holding_horizon per SPEC §4.2
 - [x] **Fix param_history regression**: 7 test failures (convergence threshold, conn.close on None, reason case, mock ordering) ✅ `f6927d9` — 773/773 tests green
 - [x] **Invariant #8 audit**: Idempotent ticks — 7 reproducibility tests ✅ `2264188` — 780/780 tests green
+- [x] **Invariant #10 fix**: Risk-prompt consistency CI validator + risk.yaml sizing fix ✅ `34d1dee` — 14 tests, 794/794 green
 
 ### Hermes — After P0
 - [x] Fix #52/#44: Unify learning loop format (blocked by Casper data bus)
@@ -249,7 +250,7 @@ Per `SPEC.md` §1.3. Must audit post-migration.
 | 7 | Out-of-sample validation | ✅ | Walk-forward wired and integrated into nightly pipeline (#19 `3ce9ae0`) |
 | 8 | Idempotent ticks | ✅ | 7 reproducibility tests (`2264188`) — same harness, separate instances, seeded data, state leakage, field comparison |
 | 9 | Bootstrap fast and small | ✅ | Learning mode active, loose start |
-| 10 | Risk gate mirrors prompts | ⚠️ | #29-style drift — need CI enforcement |
+| 10 | Risk gate mirrors prompts | ✅ | CI validator `34d1dee` — `scripts/check_risk_prompt_consistency.py` + 14 tests. Extracts conviction/sizing/stop-loss from prompts, cross-checks with risk.yaml. Fixed: Stonks 3% sizing now matches. |
 | 11 | Cron is trigger, not instruction | ✅ | Cron messages fixed per DECISIONS #14 |
 | 12 | Decision quality gates warning-only during bootstrap | ✅ | BOOTSTRAP_MODE=True (just patched) |
 | 13 | Cron timeout must exceed model inference time | ⚠️ | Verify 600s timeouts set for Aldridge/pro |
