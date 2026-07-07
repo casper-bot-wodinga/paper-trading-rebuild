@@ -25,6 +25,8 @@ from src.replay import ReplayResult, Tick, Portfolio, TraderDecision
 from src.safety import BreakerLevel, CircuitBreaker, ChangeGovernor
 from src.signals import SignalEngine, SignalParams, SignalReport
 from src.metrics import objective_score
+from src.risk.manager import RiskManager
+from src.risk.stop_loss import StopLossManager
 
 log = logging.getLogger("trader")
 
@@ -132,6 +134,11 @@ class Trader:
         self.governor = ChangeGovernor(trader_id)
         self.max_journal_entries = max_journal_entries
 
+        # Build sector lookup from fundamentals DB (if available)
+        sector_lookup = self._build_sector_lookup()
+        self.risk_manager = RiskManager(sector_lookup=sector_lookup)
+        self.stop_loss = StopLossManager()
+
         self.state = TraderState(
             equity=initial_balance,
             cash=initial_balance,
@@ -139,6 +146,72 @@ class Trader:
 
         # Decision function — can be swapped for LLM agent or Q-learning
         self._decider: Optional[Callable] = None
+
+    def _build_sector_lookup(self) -> Optional[Callable[[str], Optional[str]]]:
+        """Build a sector-lookup function from the fundamentals database.
+
+        Returns None if fundamentals DB is unavailable, causing SectorGate
+        to classify all tickers as 'Unknown'.
+        """
+        try:
+            from src.fundamentals import Fundamentals
+            # Load all tickers with known sectors into a cache
+            try:
+                fundamentals_list = Fundamentals.load_all()
+                sector_map: Dict[str, str] = {}
+                for f in fundamentals_list:
+                    if f.ticker and f.sector:
+                        sector_map[f.ticker.upper()] = f.sector
+                if sector_map:
+                    log.info("RiskManager: loaded sectors for %d tickers", len(sector_map))
+                    return lambda t: sector_map.get(t.upper())
+            except Exception:
+                pass
+        except ImportError:
+            pass
+        return None
+
+    def _lookup_sector(self, ticker: str) -> Optional[str]:
+        """Look up sector for a ticker using the sector lookup."""
+        lookup = self._build_sector_lookup()
+        if lookup:
+            try:
+                return lookup(ticker)
+            except Exception:
+                pass
+        return None
+
+    def _build_risk_context(self) -> Dict[str, Any]:
+        """Build the portfolio context dict for RiskManager.evaluate()."""
+        positions = []
+        for ticker, pos in self.state.positions.items():
+            price = pos.get("current_price", pos.get("entry_price", 0))
+            positions.append({
+                "ticker": ticker,
+                "quantity": pos.get("shares", 0),
+                "market_value": pos.get("shares", 0) * price,
+                "sector": pos.get("sector"),
+            })
+        return {
+            "portfolio_value": self.state.equity,
+            "cash": self.state.cash,
+            "positions": positions,
+            "day_trades": getattr(self.state, "day_trades", []),
+        }
+
+    def _decision_to_action(
+        self, decision: TraderDecision, tick: Any
+    ) -> Dict[str, Any]:
+        """Convert a TraderDecision to RiskManager action dict."""
+        ticker = decision.ticker or tick.ticker
+        price = tick.close
+        return {
+            "type": decision.decision,
+            "ticker": ticker,
+            "quantity": decision.shares,
+            "price": price,
+            "conviction": decision.conviction,
+        }
 
     # ── Tick processing ─────────────────────────────────────────────────────
 
@@ -168,6 +241,30 @@ class Trader:
             self._journal(tick, signal, "BLOCKED", f"Breaker: {self.breaker.state.level.value}")
             return None
 
+        # 2. STOP-LOSS CHECK — enforce before any new trade decisions
+        breached = self.stop_loss.check_all(
+            positions=self.state.positions,
+            current_prices={tick.ticker: price},
+        )
+        for breach in breached:
+            bt = breach["ticker"]
+            if bt in self.state.positions:
+                pos = self.state.positions[bt]
+                sell_decision = TraderDecision(
+                    ticker=bt,
+                    decision="SELL",
+                    shares=pos["shares"],
+                    conviction=1.0,
+                    rationale=f"Stop-loss ({breach['stop_type']}): {breach['reason']}",
+                )
+                self._simulate_fill(tick, sell_decision)
+                self._journal(tick, signal, "SELL", sell_decision.rationale)
+                self.stop_loss.record_exit(bt)
+                log.warning(
+                    "[%s] STOP-LOSS triggered: %s",
+                    self.trader_id, sell_decision.rationale,
+                )
+
         # 3. Position sizing: apply breaker multiplier + warmup reduction
         size_mult = self.breaker.state.position_multiplier
         if self.state.mode == TraderMode.WARMUP:
@@ -187,6 +284,21 @@ class Trader:
         if decision.decision == "BUY":
             max_cost = self.state.equity * signal.recommended_size_pct * size_mult
             decision.shares = int(max_cost / price) if price > 0 else 0
+
+        # 5a. Risk gate evaluation (concentration, sector, exposure, cash, PDT)
+        if decision.decision == "BUY":
+            risk_action = self._decision_to_action(decision, tick)
+            risk_context = self._build_risk_context()
+            granted, reason, gate_results = self.risk_manager.evaluate(
+                action=risk_action,
+                portfolio=risk_context,
+                positions=list(risk_context.get("positions", [])),
+                timestamp=getattr(tick, "timestamp", None),
+            )
+            if not granted:
+                log.warning("[%s] Risk gate blocked %s: %s", self.trader_id, ticker, reason)
+                self._journal(tick, signal, "BLOCKED", reason)
+                return None
 
         # 6. Execute (simulated in paper; real would call Alpaca)
         self._simulate_fill(tick, decision)
@@ -271,7 +383,10 @@ class Trader:
                     "shares": decision.shares,
                     "entry_price": price,
                     "entry_time": tick.timestamp,
+                    "sector": self._lookup_sector(ticker),
                 }
+                # Register with stop-loss manager
+                self.stop_loss.set_entry(ticker, price)
 
         elif decision.decision == "SELL":
             if ticker not in self.state.positions:
@@ -293,6 +408,8 @@ class Trader:
 
             if shares >= pos["shares"]:
                 del self.state.positions[ticker]
+                # Clean up stop-loss tracking on full exit
+                self.stop_loss.record_exit(ticker)
             else:
                 pos["shares"] -= shares
 
