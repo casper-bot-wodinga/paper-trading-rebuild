@@ -2,7 +2,7 @@
 
 > **Repo:** `Tesselation-Studios/paper-trading-rebuild`
 > **Board:** [GitHub Projects](https://github.com/users/casper-bot-wodinga/projects/2)
-> **Last updated:** 2026-07-07 (overnight — #14 nightly synthesis CLI wired)
+> **Last updated:** 2026-07-07 (overnight — migration script hardened, #14 nightly synthesis CLI wired)
 > **Active profile:** Raf watching on Canvas — this is the single source of truth for what's being worked on.
 
 ---
@@ -192,6 +192,8 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] Fix #42: Backfill ADBE stop-loss; add assertion ✅ `7b34ecb`
 - [x] Fix #28: Diff schema.sql vs live Postgres, generate migration ✅ `0bf231b`
 - [x] Fix #29: D-state watchdog — detect stuck traders ✅ `7c1bb62`
+- [x] **Fix Postgres migration**: NUL sanitization, `--pull` flag, `SQLITE_PATH` env var ✅ `cc1636c` — 1,972 rows migrated across 9 tables
+- [ ] **Build after-hours format test**: Validate trader outputs match required JSON format
 
 ### Hermes — After P0
 - [x] Fix #52/#44: Unify learning loop format (blocked by Casper data bus)
