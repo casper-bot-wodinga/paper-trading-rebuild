@@ -193,7 +193,7 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] Fix #28: Diff schema.sql vs live Postgres, generate migration ✅ `0bf231b`
 - [x] Fix #29: D-state watchdog — detect stuck traders ✅ `7c1bb62`
 - [x] **Fix Postgres migration**: NUL sanitization, `--pull` flag, `SQLITE_PATH` env var ✅ `cc1636c` — 1,972 rows migrated across 9 tables
-- [ ] **Build after-hours format test**: Validate trader outputs match required JSON format
+- [x] **Build after-hours format test**: `DecisionFormatValidator` + 97 tests ✅ `4d08179` — validates action, ticker, quantity, confidence, thesis, signals_used, exit_condition, holding_horizon per SPEC §4.2
 
 ### Hermes — After P0
 - [x] Fix #52/#44: Unify learning loop format (blocked by Casper data bus)
