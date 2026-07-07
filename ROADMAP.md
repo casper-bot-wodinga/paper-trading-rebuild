@@ -88,7 +88,7 @@ Trades flow, but with bugs that corrupt data, waste tokens, or cause wrong decis
 | # | Issue | Owner | Blocked? | Action |
 |---|-------|-------|----------|--------|
 | **28** | Fix DB drift — `schema.sql` vs reality (Postgres tables don't match spec) | Hermes | Nothing | ✅ Fixed `0bf231b`. Resolved 14 diffs: core schema now matches live docker.klo. Added fundamentals table, missing columns across 11 tables. |
-| **29** | D-state alert for stuck traders — no alert when trader hasn't produced a decision in N ticks | Hermes | Nothing | Add D-state monitor to Hermes watchdog cron; alert if trader silent > 3 ticks |
+| **29** | D-state alert for stuck traders — no alert when trader hasn't produced a decision in N ticks | Hermes | Nothing | ✅ Fixed `7c1bb62`. `src/d_state_watchdog.py` monitors agent_state + decisions via Postgres. 30 tests. |
 
 ---
 
@@ -191,10 +191,11 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] Fix #45: Entry gate should allow SELL (`src/risk/gates.py`) ✅ `b6cddb5`
 - [x] Fix #42: Backfill ADBE stop-loss; add assertion ✅ `7b34ecb`
 - [x] Fix #28: Diff schema.sql vs live Postgres, generate migration ✅ `0bf231b`
+- [x] Fix #29: D-state watchdog — detect stuck traders ✅ `7c1bb62`
 
 ### Hermes — After P0
 - [ ] Fix #52/#44: Unify learning loop format
-- [ ] Fix #29: D-state alert watchdog
+- [x] Fix #29: D-state alert watchdog ✅
 - [ ] Wire #20: Transaction costs into replay harness
 
 ### Delegate to Casper (via bridge)
