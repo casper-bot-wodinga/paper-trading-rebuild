@@ -2,7 +2,7 @@
 
 > **Repo:** `Tesselation-Studios/paper-trading-rebuild`
 > **Board:** [GitHub Projects](https://github.com/users/casper-bot-wodinga/projects/2)
-> **Last updated:** 2026-07-07 (overnight — #21 two-phase validation Postgres migration)
+> **Last updated:** 2026-07-07 (overnight — #14 nightly synthesis CLI wired)
 > **Active profile:** Raf watching on Canvas — this is the single source of truth for what's being worked on.
 
 ---
@@ -110,7 +110,7 @@ These are the rebuild's feature set. They make the system better but aren't bloc
 | # | Enhancement | Owner | Blocked? | Notes |
 |---|-------------|-------|----------|-------|
 | **27** | Prompt tiering — prod/candidate registry | Hermes | — | ✅ Fixed `c21c2fd`. PromptRegistry class with 4-gate promotion: walk-forward validation, two-phase agreement, 5-day minimum evaluation, no divergence. 34 tests. Atomic JSON persistence with auto-versioning. |
-| **14** | Nightly synthesis + auto-promote | Hermes | — | `src/synthesis.py` exists. Wire cron, fan-out to Docker workers, auto-PR winners. |
+| **14** | Nightly synthesis + auto-promote | Hermes | — | ✅ `scripts/nightly_synthesis.py` wired — queries Postgres, runs journal analysis, produces markdown reports. Cron-ready. |
 
 ### Data Infrastructure
 
@@ -200,7 +200,7 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] Fix #21: Two-phase validation Postgres migration ✅ `9c9ee8e`
 - [x] Next P2: #19 Walk-forward validation integration ✅ `3ce9ae0`
 - [x] Next P2: #27 Prompt tiering — prod/candidate registry ✅ `c21c2fd`
-- [ ] Next P2: #14 Nightly synthesis + auto-promote
+- [x] Next P2: #14 Nightly synthesis + auto-promote ✅ (CLI script `scripts/nightly_synthesis.py` wired — queries Postgres, runs journal analysis, produces markdown reports. Cron-ready. Reports saved to `reports/`.)
 
 ### Delegate to Casper (via bridge)
 - [ ] **URGENT:** Fix stale data bus quotes — system-wide June 16 data
