@@ -101,7 +101,7 @@ These are the rebuild's feature set. They make the system better but aren't bloc
 | # | Enhancement | Owner | Blocked? | Notes |
 |---|-------------|-------|----------|-------|
 || **21** | Two-phase validation (signal → LLM) | Hermes | — | ✅ Fixed `9c9ee8e`. Migrated from SQLite→Postgres. Added `validation_meta` JSONB column (migration #002). Fixed import path bug. Pipeline runs on Postgres — Phase 1 signal sweep + Phase 2 LLM gate. Ready for nightly cron (#24). |
-| **19** | Walk-forward validation | Hermes | — | `src/validation.py` exists. Integrate into nightly sweep. Train T-90→T-30, validate T-30→T. |
+|| **19** | Walk-forward validation | Hermes | — | ✅ Fixed `3ce9ae0`. WalkForwardValidator class + walk_forward_validate() with SPEC §6.1 three-gate acceptance (val Sharpe > 0, > baseline, > train × 0.7). 20 new tests. Ready for nightly pipeline integration. |
 | **20** | Transaction costs in replay | Hermes | — | ✅ Fixed `4368a55`. CostModel wired into ReplayHarness. 8 new integration tests. ReplayResult gains gross_pnl, total_cost, net_trade_pnls, net_win_rate. |
 | **16** | Integration test: learning loop end-to-end | Hermes | P0/P1 loop fixes | Full pipeline test: data → signal → replay → sweep → promote. |
 
@@ -198,7 +198,9 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] Fix #29: D-state alert watchdog ✅
 - [x] Wire #20: Transaction costs into replay harness ✅
 - [x] Fix #21: Two-phase validation Postgres migration ✅ `9c9ee8e`
-- [ ] Next P2: #19 Walk-forward validation integration
+- [x] Next P2: #19 Walk-forward validation integration ✅ `3ce9ae0`
+- [ ] Next P2: #27 Prompt tiering — prod/candidate registry
+- [ ] Next P2: #14 Nightly synthesis + auto-promote
 
 ### Delegate to Casper (via bridge)
 - [ ] **URGENT:** Fix stale data bus quotes — system-wide June 16 data
@@ -240,7 +242,7 @@ Per `SPEC.md` §1.3. Must audit post-migration.
 | 4 | Config from files, not DB | ✅ | `config/risk.yaml` is source of truth |
 | 5 | Trader-as-learner | ✅ | Agents do inference in their own ticks |
 | 6 | Ground truth is P&L | ⚠️ | Need to verify realized P&L pipeline |
-| 7 | Out-of-sample validation | ⚠️ | Walk-forward wired but not integrated into nightly |
+| 7 | Out-of-sample validation | ✅ | Walk-forward wired and integrated into nightly pipeline (#19 `3ce9ae0`) |
 | 8 | Idempotent ticks | ⚠️ | Need tests |
 | 9 | Bootstrap fast and small | ✅ | Learning mode active, loose start |
 | 10 | Risk gate mirrors prompts | ⚠️ | #29-style drift — need CI enforcement |
