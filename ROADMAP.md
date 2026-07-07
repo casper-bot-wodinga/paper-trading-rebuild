@@ -2,7 +2,7 @@
 
 > **Repo:** `Tesselation-Studios/paper-trading-rebuild`
 > **Board:** [GitHub Projects](https://github.com/users/casper-bot-wodinga/projects/2)
-> **Last updated:** 2026-07-07 (overnight — migration script hardened, #14 nightly synthesis CLI wired)
+> **Last updated:** 2026-07-07 (overnight — param_history regression fixes `f6927d9`, 773 tests green, all Hermes P0/P1/P2 done)
 > **Active profile:** Raf watching on Canvas — this is the single source of truth for what's being worked on.
 
 ---
@@ -194,6 +194,7 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] Fix #29: D-state watchdog — detect stuck traders ✅ `7c1bb62`
 - [x] **Fix Postgres migration**: NUL sanitization, `--pull` flag, `SQLITE_PATH` env var ✅ `cc1636c` — 1,972 rows migrated across 9 tables
 - [x] **Build after-hours format test**: `DecisionFormatValidator` + 97 tests ✅ `4d08179` — validates action, ticker, quantity, confidence, thesis, signals_used, exit_condition, holding_horizon per SPEC §4.2
+- [x] **Fix param_history regression**: 7 test failures (convergence threshold, conn.close on None, reason case, mock ordering) ✅ `f6927d9` — 773/773 tests green
 
 ### Hermes — After P0
 - [x] Fix #52/#44: Unify learning loop format (blocked by Casper data bus)
