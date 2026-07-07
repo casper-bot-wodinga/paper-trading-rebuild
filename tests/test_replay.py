@@ -572,3 +572,177 @@ class TestStopLossComputation:
         assert _compute_stop_loss(1.0) == 0.95
         assert _compute_stop_loss(0.05) == 0.05  # rounds to nearest 0.01
         assert _compute_stop_loss(0.001) == 0.0  # rounds down
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Transaction Cost Integration Tests (#20)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTransactionCostIntegration:
+    """Verify CostModel wires into ReplayHarness correctly."""
+
+    def test_no_cost_model_produces_gross_pnl(self):
+        """Without cost model, total_pnl = gross, total_cost = 0."""
+        from src.replay import ReplayHarness, make_deterministic_uptrend_ticks
+
+        ticks = make_deterministic_uptrend_ticks(n=10, start_price=100.0)
+        harness = ReplayHarness(initial_balance=100_000.0)
+
+        result = harness.run(ticks, buy_hold_trader)
+
+        assert result.total_cost == 0.0
+        assert result.gross_pnl == result.total_pnl
+        assert result.total_pnl >= 0  # uptrend should be profitable
+
+    def test_cost_model_produces_net_pnl(self):
+        """With cost model on round-trip trades, pnl_net exists and total_cost > 0."""
+        from src.replay import ReplayHarness, make_deterministic_uptrend_ticks
+        from src.transaction_costs import CostModel
+        from src.replay import TraderDecision
+
+        ticks = make_deterministic_uptrend_ticks(n=10, start_price=100.0)
+        cost_model = CostModel(slippage_bps=10.0, spread_bps=5.0,
+                               commission_per_share=0.0, min_trade_cost=0.0)
+        harness = ReplayHarness(initial_balance=100_000.0, cost_model=cost_model)
+
+        # Trader that buys first tick, sells last tick (round-trip)
+        buy_done = False
+
+        def round_trip_trader(tick, portfolio):
+            nonlocal buy_done
+            ticker = tick.ticker
+            if not buy_done:
+                buy_done = True
+                return TraderDecision(ticker=ticker, decision="BUY", conviction=1.0,
+                                      rationale="Buy first tick")
+            # On the last tick, sell everything
+            if ticker in portfolio.positions:
+                return TraderDecision(ticker=ticker, decision="SELL", conviction=1.0,
+                                      rationale="Sell last tick")
+            return TraderDecision(ticker=ticker, decision="HOLD", conviction=0.0)
+
+        result = harness.run(ticks, round_trip_trader)
+
+        # Should have completed trades
+        assert len(result.trades) > 0
+        for trade in result.trades:
+            assert hasattr(trade, "pnl_net")
+            assert trade.pnl_net <= trade.pnl  # costs reduce P&L
+
+        assert result.total_cost > 0
+        assert result.gross_pnl >= result.total_pnl
+        assert result.total_pnl == pytest.approx(result.gross_pnl - result.total_cost)
+
+    def test_cost_model_does_not_affect_zero_trade_run(self):
+        """With cost model but no trades, nothing breaks."""
+        from src.replay import ReplayHarness, Tick
+        from src.transaction_costs import CostModel
+
+        ticks = [Tick(
+            timestamp=__import__("datetime").datetime(2024, 1, 2, 10, 0),
+            ticker="AAPL", open=100, high=101, low=99, close=100, volume=1000,
+        )]
+        cost_model = CostModel.default()
+        harness = ReplayHarness(initial_balance=100_000.0, cost_model=cost_model)
+
+        # HOLD-only trader
+        def hold_trader(tick, portfolio):
+            from src.replay import TraderDecision
+            return TraderDecision(ticker=tick.ticker, decision="HOLD", conviction=0.0)
+
+        result = harness.run(ticks, hold_trader)
+        assert result.total_cost == 0.0
+        assert result.gross_pnl == 0.0
+        assert len(result.trades) == 0
+
+    def test_cost_model_adjusts_total_pnl(self):
+        """total_pnl reflects net when cost model is active."""
+        from src.replay import ReplayHarness, make_uptrend_ticks
+        from src.transaction_costs import CostModel
+
+        ticks = make_uptrend_ticks(n=30, start_price=100.0, seed=42)
+        cost_model = CostModel(slippage_bps=100.0, spread_bps=0.0,
+                               commission_per_share=0.0, min_trade_cost=0.0)
+
+        # Run WITH costs
+        h1 = ReplayHarness(initial_balance=100_000.0, cost_model=cost_model)
+        r1 = h1.run(ticks, buy_hold_trader)
+
+        # Run WITHOUT costs
+        h2 = ReplayHarness(initial_balance=100_000.0)
+        r2 = h2.run(ticks, buy_hold_trader)
+
+        # With costs: net P&L should be lower
+        if len(r1.trades) > 0:
+            assert r1.total_pnl < r2.total_pnl, \
+                f"Net P&L {r1.total_pnl:.2f} should be lower than gross {r2.total_pnl:.2f}"
+            assert r1.total_cost > 0
+
+    def test_net_trade_pnls_property(self):
+        """ReplayResult.net_trade_pnls returns cost-adjusted values."""
+        from src.replay import ReplayHarness, make_deterministic_uptrend_ticks
+        from src.transaction_costs import CostModel
+
+        ticks = make_deterministic_uptrend_ticks(n=10, start_price=100.0)
+        cost_model = CostModel(slippage_bps=10.0, spread_bps=5.0,
+                               commission_per_share=0.0, min_trade_cost=0.0)
+        harness = ReplayHarness(initial_balance=100_000.0, cost_model=cost_model)
+
+        result = harness.run(ticks, buy_hold_trader)
+
+        net_pnls = result.net_trade_pnls
+        gross_pnls = result.trade_pnls
+
+        assert len(net_pnls) == len(gross_pnls)
+        for net, gross in zip(net_pnls, gross_pnls):
+            assert net <= gross  # costs always reduce
+
+    def test_net_win_rate(self):
+        """net_win_rate may be lower than win_rate due to costs."""
+        from src.replay import ReplayHarness, make_deterministic_uptrend_ticks
+        from src.transaction_costs import CostModel
+
+        ticks = make_deterministic_uptrend_ticks(n=10, start_price=100.0)
+        cost_model = CostModel(slippage_bps=10.0, spread_bps=5.0,
+                               commission_per_share=0.0, min_trade_cost=0.0)
+        harness = ReplayHarness(initial_balance=100_000.0, cost_model=cost_model)
+
+        result = harness.run(ticks, buy_hold_trader)
+
+        assert hasattr(result, "net_win_rate")
+        assert isinstance(result.net_win_rate, float)
+        # net_win_rate ≤ win_rate (costs can flip marginal winners)
+        assert result.net_win_rate <= result.win_rate
+
+    def test_alpaca_paper_cost_model_integration(self):
+        """Alpaca paper cost model works end-to-end."""
+        from src.replay import ReplayHarness, make_deterministic_uptrend_ticks
+        from src.transaction_costs import CostModel
+
+        ticks = make_deterministic_uptrend_ticks(n=10, start_price=100.0)
+        harness = ReplayHarness(
+            initial_balance=100_000.0,
+            cost_model=CostModel.alpaca_paper(),
+        )
+
+        result = harness.run(ticks, buy_hold_trader)
+        assert result.total_cost >= 0
+        for trade in result.trades:
+            assert hasattr(trade, "pnl_net")
+
+    def test_backward_compatible_no_cost_model(self):
+        """ReplayHarness without cost_model still works (backward compat)."""
+        from src.replay import ReplayHarness, make_uptrend_ticks
+
+        ticks = make_uptrend_ticks(n=20, start_price=100.0, seed=99)
+        harness = ReplayHarness(initial_balance=100_000.0)
+
+        result = harness.run(ticks, buy_hold_trader)
+
+        # Old API still works
+        assert isinstance(result.equity_curve, __import__("numpy").ndarray)
+        assert isinstance(result.trades, list)
+        assert result.n_ticks == 20
+        assert result.total_cost == 0.0
+        assert result.gross_pnl == result.total_pnl  # equal when no costs
