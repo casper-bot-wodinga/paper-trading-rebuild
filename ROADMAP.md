@@ -102,7 +102,7 @@ These are the rebuild's feature set. They make the system better but aren't bloc
 |---|-------------|-------|----------|-------|
 | **21** | Two-phase validation (signal → LLM) | Hermes | — | `src/sweep_validation.py` exists; wire into nightly pipeline. Phase 1: signal engine filter (free). Phase 2: LLM replay (top 3). Agreement gate. |
 | **19** | Walk-forward validation | Hermes | — | `src/validation.py` exists. Integrate into nightly sweep. Train T-90→T-30, validate T-30→T. |
-| **20** | Transaction costs in replay | Hermes | — | `src/transaction_costs.py` exists. Wire into `src/replay.py` ReplayHarness. Critical per fusion review — optimizes net P&L, not gross. |
+| **20** | Transaction costs in replay | Hermes | — | ✅ Fixed `4368a55`. CostModel wired into ReplayHarness. 8 new integration tests. ReplayResult gains gross_pnl, total_cost, net_trade_pnls, net_win_rate. |
 | **16** | Integration test: learning loop end-to-end | Hermes | P0/P1 loop fixes | Full pipeline test: data → signal → replay → sweep → promote. |
 
 ### Prompt Management
