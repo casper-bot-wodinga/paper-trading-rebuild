@@ -628,6 +628,8 @@ def gradient_step(
     learning_rate: float = 0.01,
     max_change_pct: float = 0.05,
     param_names: Optional[List[str]] = None,
+    trader_id: str = "",
+    record_history: bool = True,
 ) -> Tuple[SignalParams, Dict[str, float]]:
     """Run one gradient descent step across all parameters.
 
@@ -637,6 +639,8 @@ def gradient_step(
         learning_rate: Step size (default 0.01).
         max_change_pct: Max parameter change as fraction of its range.
         param_names: Which params to optimize (default: all).
+        trader_id: Trader identifier for history tracking.
+        record_history: If True, records changes to param_history table (#23).
 
     Returns:
         (updated_params, gradients_dict)
@@ -660,7 +664,27 @@ def gradient_step(
         step = learning_rate * grad
         step = float(np.clip(step, -max_step, max_step))
 
-        new_val = b.clip(params.get(name) + step)
+        old_val = params.get(name)
+        new_val = b.clip(old_val + step)
         params.set(name, new_val)
+
+        # Record parameter change history (#23)
+        if record_history and abs(new_val - old_val) > 1e-10:
+            try:
+                from src.param_history import record_gradient_step
+                record_gradient_step(
+                    param_name=name,
+                    old_value=old_val,
+                    new_value=new_val,
+                    before_score=baseline,
+                    trader_id=trader_id,
+                    learning_rate=learning_rate,
+                    gradient=grad,
+                )
+            except Exception as e:
+                log.warning(
+                    "Failed to record param history for %s: %s — continuing",
+                    name, e,
+                )
 
     return params, gradients

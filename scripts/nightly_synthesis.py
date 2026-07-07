@@ -252,6 +252,22 @@ def run_synthesis(
 
     conn.close()
 
+    # ── Parameter History Analysis (#23) ──────────────────────────────────
+    param_report = ""
+    try:
+        from src.param_history import ParamHistory
+        ph = ParamHistory()
+        traders_to_analyze = [trader] if trader else ["kairos", "aldridge", "stonks"]
+        for tid in traders_to_analyze:
+            report = ph.generate_report(trader_id=tid, days=1)
+            if report.total_changes > 0:
+                param_report += ph.summary_str(report) + "\n\n"
+        if param_report:
+            print(f"\n[nightly_synthesis] Parameter history analysis appended")
+    except Exception as e:
+        print(f"\n[nightly_synthesis] Param history analysis failed: {e}")
+        param_report = ""
+
     # Run synthesis
     synthesizer = Synthesizer()
     summary = synthesizer.synthesize(
@@ -265,6 +281,8 @@ def run_synthesis(
         os.makedirs(output_dir, exist_ok=True)
         report_path = os.path.join(output_dir, f"nightly_synthesis_{date_str}.md")
         formatted = summary.format()
+        if param_report:
+            formatted += "\n\n---\n\n" + param_report
         with open(report_path, "w") as f:
             f.write(formatted)
         print(f"\n[nightly_synthesis] Report written to {report_path}")

@@ -362,6 +362,7 @@ class TestGradientDescent:
 
         new_params, gradients = gradient_step(
             params, scorer, learning_rate=0.1, param_names=["momentum_threshold"],
+            record_history=False,
         )
 
         # Params should have moved
@@ -379,6 +380,7 @@ class TestGradientDescent:
         new_params, _ = gradient_step(
             params, scorer, learning_rate=1.0,  # aggressive
             param_names=["rsi_oversold"],
+            record_history=False,
         )
         # Should be clipped to max (40)
         assert new_params.get("rsi_oversold") <= 40.0
@@ -395,6 +397,7 @@ class TestGradientDescent:
             params, scorer, learning_rate=100.0,  # absurdly aggressive
             max_change_pct=0.05,
             param_names=["momentum_threshold"],
+            record_history=False,
         )
         change = abs(new_params.get("momentum_threshold") - 0.55)
         assert change <= 0.03 + 0.001  # max step + epsilon tolerance
@@ -405,7 +408,7 @@ class TestGradientDescent:
         def bad_scorer(p: SignalParams) -> float:
             raise RuntimeError("always fails")
 
-        new_params, gradients = gradient_step(params, bad_scorer)
+        new_params, gradients = gradient_step(params, bad_scorer, record_history=False)
         # Should return unchanged params, empty gradients
         assert gradients == {}
         assert new_params.get("momentum_threshold") == 0.55
