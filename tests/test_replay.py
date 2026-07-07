@@ -746,3 +746,130 @@ class TestTransactionCostIntegration:
         assert result.n_ticks == 20
         assert result.total_cost == 0.0
         assert result.gross_pnl == result.total_pnl  # equal when no costs
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Idempotency tests — Invariant #8
+# "Running the same tick twice produces the same result."
+# No side effects that depend on timing, no shared state leakage.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestIdempotency:
+    """Invariant #8: Idempotent ticks — same input → same output every time."""
+
+    def test_same_harness_twice_produces_identical_results(self):
+        """Re-running the same harness with same data → identical result."""
+        ticks = make_deterministic_uptrend_ticks(n=50, start_price=100.0, step_pct=0.005)
+        harness = ReplayHarness(initial_balance=100_000)
+
+        result1 = harness.run(ticks, buy_hold_trader)
+        result2 = harness.run(ticks, buy_hold_trader)
+
+        assert result1.final_equity == result2.final_equity
+        assert result1.total_pnl == result2.total_pnl
+        assert result1.total_return_pct == result2.total_return_pct
+        assert result1.n_ticks == result2.n_ticks
+        assert result1.n_decisions == result2.n_decisions
+        assert len(result1.trades) == len(result2.trades)
+        assert np.array_equal(result1.equity_curve, result2.equity_curve)
+        for t1, t2 in zip(result1.trades, result2.trades):
+            assert t1.ticker == t2.ticker
+            assert t1.entry_price == t2.entry_price
+            assert t1.exit_price == t2.exit_price
+            assert t1.shares == t2.shares
+            assert t1.pnl == t2.pnl
+
+    def test_two_instances_same_result(self):
+        """Two separate harness instances with same inputs → identical."""
+        ticks = make_deterministic_uptrend_ticks(n=50, start_price=100.0, step_pct=0.005)
+
+        h1 = ReplayHarness(initial_balance=100_000)
+        h2 = ReplayHarness(initial_balance=100_000)
+
+        r1 = h1.run(ticks, buy_hold_trader)
+        r2 = h2.run(ticks, buy_hold_trader)
+
+        assert r1.final_equity == r2.final_equity
+        assert r1.total_pnl == r2.total_pnl
+        assert np.array_equal(r1.equity_curve, r2.equity_curve)
+        assert len(r1.trades) == len(r2.trades)
+
+    def test_seeded_random_walk_reproducible(self):
+        """Uptrend ticks with same seed produce reproducible results."""
+        ticks1 = make_uptrend_ticks(n=30, start_price=100.0, seed=42)
+        ticks2 = make_uptrend_ticks(n=30, start_price=100.0, seed=42)
+
+        h1 = ReplayHarness(initial_balance=100_000)
+        h2 = ReplayHarness(initial_balance=100_000)
+
+        r1 = h1.run(ticks1, buy_hold_trader)
+        r2 = h2.run(ticks2, buy_hold_trader)
+
+        assert r1.final_equity == r2.final_equity
+        assert r1.total_pnl == r2.total_pnl
+        assert np.array_equal(r1.equity_curve, r2.equity_curve)
+
+    def test_trend_following_deterministic(self):
+        """Trend-following trader on deterministic data → reproducible."""
+        ticks = make_deterministic_uptrend_ticks(n=40, start_price=100.0, step_pct=0.005)
+
+        h1 = ReplayHarness(initial_balance=100_000, require_conviction=0.0)
+        h2 = ReplayHarness(initial_balance=100_000, require_conviction=0.0)
+
+        r1 = h1.run(ticks, trend_following_trader)
+        r2 = h2.run(ticks, trend_following_trader)
+
+        assert r1.final_equity == r2.final_equity
+        assert r1.total_pnl == r2.total_pnl
+        assert r1.n_decisions == r2.n_decisions
+        assert np.array_equal(r1.equity_curve, r2.equity_curve)
+
+    def test_never_buy_trader_deterministic(self):
+        """No-trade runs are always identical."""
+        ticks = make_deterministic_uptrend_ticks(n=30, start_price=100.0)
+
+        h1 = ReplayHarness(initial_balance=100_000)
+        h2 = ReplayHarness(initial_balance=100_000)
+
+        r1 = h1.run(ticks, never_buy_trader)
+        r2 = h2.run(ticks, never_buy_trader)
+
+        assert r1.final_equity == r2.final_equity
+        assert r1.final_equity == 100_000
+        assert len(r1.trades) == 0
+        assert len(r2.trades) == 0
+
+    def test_no_shared_mutation_between_runs(self):
+        """First run does not affect second run's results (no state leakage)."""
+        ticks = make_deterministic_uptrend_ticks(n=50, start_price=100.0)
+
+        harness = ReplayHarness(initial_balance=100_000)
+        r1 = harness.run(ticks, buy_hold_trader)
+
+        # Mutate a trade from r1 — should not affect r2
+        if r1.trades:
+            r1.trades[0].pnl = 999999.99
+
+        r2 = harness.run(ticks, buy_hold_trader)
+
+        assert r2.final_equity == r1.final_equity
+        assert np.array_equal(r2.equity_curve, r1.equity_curve)
+        assert len(r2.trades) == len(r1.trades)
+
+    def test_replay_result_fields_match_deterministic(self):
+        """All ReplayResult fields are deterministic."""
+        ticks = make_deterministic_uptrend_ticks(n=30, start_price=100.0, step_pct=0.005)
+
+        r1 = ReplayHarness(initial_balance=100_000).run(ticks, buy_hold_trader)
+        r2 = ReplayHarness(initial_balance=100_000).run(ticks, buy_hold_trader)
+
+        assert r1.initial_balance == r2.initial_balance
+        assert r1.final_equity == r2.final_equity
+        assert r1.total_pnl == r2.total_pnl
+        assert r1.total_return_pct == r2.total_return_pct
+        assert r1.n_ticks == r2.n_ticks
+        assert r1.n_decisions == r2.n_decisions
+        assert r1.tickers_seen == r2.tickers_seen
+        assert r1.win_rate == r2.win_rate
+        assert np.array_equal(r1.returns, r2.returns)
