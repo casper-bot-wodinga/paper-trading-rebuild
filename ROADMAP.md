@@ -2,7 +2,7 @@
 
 > **Repo:** `Tesselation-Studios/paper-trading-rebuild`
 > **Board:** [GitHub Projects](https://github.com/users/casper-bot-wodinga/projects/2)
-> **Last updated:** 2026-07-08 (overnight — invariants #8 + #10 verified, 794 tests green, risk-prompt CI validator)
+> **Last updated:** 2026-07-07 (overnight — param_history migration applied, Kairos ML backtest toolkit built #15, discovered data contamination #56, 810 tests green)
 > **Active profile:** Raf watching on Canvas — this is the single source of truth for what's being worked on.
 
 ---
@@ -135,7 +135,7 @@ These are the rebuild's feature set. They make the system better but aren't bloc
 | **12** | Per-tick reflection | Hermes | — | `src/reflection.py` exists. After each tick: what happened, why, what would I change? |
 | **13** | Journal analysis: counterfactual loop | Hermes | — | "Would holding longer have worked?" "Should I have bought what I watched?" Per SPEC §14. |
 | **11** | Aldridge value investor + fundamentals | Hermes | — | `src/aldridge_strategy.py` and `src/fundamentals.py` exist. Wire fundamentals scoring (P/E, dividend, earnings quality) into Aldridge's signal feed. |
-| **15** | Kairos ML backtesting toolkit | Hermes | — | ML backtesting for Kairos momentum strategy. Regime-aware performance. |
+|| **15** | Kairos ML backtesting toolkit | Hermes | — | ✅ Done `b2e1985`. `src/kairos_backtest.py` — ML-focused backtesting API with FeatureEngineer (13 features), grid search, multi-ticker scan. 19 tests. |
 
 ### Automation
 
@@ -197,6 +197,14 @@ These are Casper-owned items from his backlog that aren't captured in GitHub iss
 - [x] **Fix param_history regression**: 7 test failures (convergence threshold, conn.close on None, reason case, mock ordering) ✅ `f6927d9` — 773/773 tests green
 - [x] **Invariant #8 audit**: Idempotent ticks — 7 reproducibility tests ✅ `2264188` — 780/780 tests green
 - [x] **Invariant #10 fix**: Risk-prompt consistency CI validator + risk.yaml sizing fix ✅ `34d1dee` — 14 tests, 794/794 green
+- [x] **Apply param_history migration 003**: `trading.param_history` table created on production Postgres — nightly synthesis no longer crashes
+- [x] **Kairos ML backtesting toolkit (#15)**: `src/kairos_backtest.py` + 19 tests ✅ `b2e1985` — FeatureEngineer, grid search, multi-ticker scan, ML features
+- [x] **Created #56**: Data contamination — replay/sweep pipeline writes duplicate historical decisions to live table
+
+### Hermes — Discovered Issues
+- [ ] **#56**: Fix decision table data contamination — replay/sweep inserting same decisions 3× with different created_at
+- [ ] **Kairos risk veto cascade**: All BUY decisions vetoed (thesis too short, signals_used missing) — bootstrap expired (>30 trades). Casper needs to update Kairos workspace prompts
+- [ ] **Canvas unreachable**: canvas.wodinga.studio timing out (DNS/network) — can't push updates
 
 ### Hermes — After P0
 - [x] Fix #52/#44: Unify learning loop format (blocked by Casper data bus)
