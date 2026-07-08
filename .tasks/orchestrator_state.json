@@ -1,0 +1,22 @@
+{
+  "current_task": {
+    "id": "issue#74",
+    "source": "github",
+    "title": "P0: Virtual trader nightly test \u2014 run 24 virtuals against market data",
+    "priority": 100,
+    "number": 74,
+    "labels": [
+      "bug",
+      "priority:p0"
+    ]
+  },
+  "status": "working",
+  "started_at": "2026-07-08T06:28:12.194909+00:00",
+  "ticks": 2,
+  "last_action": "Tick #2 \u2014 see agent response",
+  "next_action": "Read task and begin work",
+  "completed": [],
+  "total_completed": 0,
+  "blocked_reason": "",
+  "last_report_at": "2026-07-08T06:30:12.355646+00:00"
+}
