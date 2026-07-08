@@ -28,6 +28,7 @@ from src.metrics import objective_score
 from src.risk.manager import RiskManager
 from src.risk.stop_loss import StopLossManager
 from src.circuit_breaker import AgentCircuitBreaker, get_breaker
+from src.observability import metrics, alert
 
 log = logging.getLogger("trader")
 
@@ -255,9 +256,13 @@ class Trader:
                           f"Circuit breaker paused: {reason}")
             log.warning("[%s] Tick SKIPPED — circuit breaker paused: %s",
                         self.trader_id, reason)
+            metrics.increment("trader.tick.skipped",
+                              tags={"trader": self.trader_id, "reason": reason})
             return None
 
         self.state.ticks_processed += 1
+        metrics.increment("trader.tick.received",
+                          tags={"trader": self.trader_id})
 
         # 1. Signal engine: compute indicators
         signal: SignalReport = self.signal_engine.process(tick)
@@ -265,6 +270,8 @@ class Trader:
         if not self.breaker.state.can_trade:
             self._journal(tick, signal, "BLOCKED", f"Breaker: {self.breaker.state.level.value}")
             self.agent_breaker.mark_decision()  # drawdown breaker is a valid stop
+            metrics.increment("trader.decision.blocked",
+                              tags={"trader": self.trader_id, "gate": "circuit_breaker"})
             return None
 
         # 2. STOP-LOSS CHECK — enforce before any new trade decisions
@@ -286,6 +293,9 @@ class Trader:
                 self._simulate_fill(tick, sell_decision)
                 self._journal(tick, signal, "SELL", sell_decision.rationale)
                 self.stop_loss.record_exit(bt)
+                metrics.increment("trader.stop_loss.triggered",
+                                  tags={"trader": self.trader_id, "ticker": bt,
+                                        "stop_type": breach.get("stop_type", "unknown")})
                 log.warning(
                     "[%s] STOP-LOSS triggered: %s",
                     self.trader_id, sell_decision.rationale,
@@ -305,6 +315,8 @@ class Trader:
         if decision is None or decision.decision == "HOLD":
             self._journal(tick, signal, "HOLD", "No signal or conviction too low")
             self.agent_breaker.mark_decision()  # HOLD is a valid decision
+            metrics.increment("trader.decision.hold",
+                              tags={"trader": self.trader_id})
             return None
 
         # 5. Apply position sizing
@@ -326,10 +338,22 @@ class Trader:
                 log.warning("[%s] Risk gate blocked %s: %s", self.trader_id, ticker, reason)
                 self._journal(tick, signal, "BLOCKED", reason)
                 self.agent_breaker.mark_decision()  # blocked is a valid outcome
+                metrics.increment("trader.decision.blocked",
+                                  tags={"trader": self.trader_id, "gate": "risk_manager",
+                                        "ticker": ticker})
                 return None
 
         # 6. Execute (simulated in paper; real would call Alpaca)
         self._simulate_fill(tick, decision)
+
+        # 7. Metrics on trade decision
+        decision_type = decision.decision.lower()
+        metrics.increment(
+            f"trader.decision.{decision_type}",
+            tags={"trader": self.trader_id, "ticker": ticker},
+        )
+        metrics.increment("trader.tick.processed",
+                          tags={"trader": self.trader_id})
 
         # 7. Journal
         self._journal(tick, signal, decision.decision, decision.rationale)
