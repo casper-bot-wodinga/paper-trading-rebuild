@@ -6,12 +6,18 @@ Each gate is a pure function: (context, action, timestamp=None) -> (granted, rea
 Gates are chained in order. The first gate to reject stops the chain.
 
 Loads thresholds from YAML config via src.config_loader.
+
+Observability: gate blocks fire alerts via src.observability:
+  - p1: PositionGate / ExposureGate blocks a trade (position-limit or exposure-limit)
+  - p0: same trader hits same gate ≥ 3 times in a session
 """
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional
 
 from src.config_loader import get_config
+from src.observability import alert, metrics
 from src.risk.gates import (
     CashGate,
     PositionGate,
@@ -30,10 +36,16 @@ class RiskManager:
         granted, reason, gate_results = manager.evaluate(
             action={"type": "BUY", "ticker": "AAPL", "quantity": 10, "price": 150.0},
             portfolio={"portfolio_value": 100000, "cash": 50000, "positions": [...], "day_trades": [...]},
-            positions=[...],
+            positions=[],
             timestamp=datetime.now(),
         )
     """
+
+    # Gates that trigger observability alerts on block
+    _OBSERVABLE_GATES = {"PositionGate", "ExposureGate"}
+
+    # Session-level threshold for escalating p1 → p0
+    _SESSION_ESCALATION_THRESHOLD = 3
 
     def __init__(self, gates: Optional[List] = None):
         """Initialize RiskManager with gates.
@@ -45,6 +57,9 @@ class RiskManager:
             self._gates = gates
         else:
             self._gates = self._build_default_gates()
+
+        # Per-session gate-block tracking: {(trader, gate_name): count}
+        self._session_gate_blocks: Dict[Tuple[str, str], int] = defaultdict(int)
 
     def _build_default_gates(self) -> List:
         """Build the default gate chain from YAML config.
@@ -77,6 +92,61 @@ class RiskManager:
     def gates(self) -> List:
         """Return the list of gates in evaluation order."""
         return list(self._gates)
+
+    def _fire_gate_block_alert(
+        self,
+        gate_name: str,
+        reason: str,
+        action: Dict[str, Any],
+    ) -> None:
+        """Fire observability alerts when an observable gate blocks a trade.
+
+        p1: immediate alert for every PositionGate/ExposureGate block.
+        p0: escalated if same trader+gate blocks ≥ SESSION_ESCALATION_THRESHOLD times.
+        """
+        if gate_name not in self._OBSERVABLE_GATES:
+            return
+
+        ticker = str(action.get("ticker", "")).upper()
+        trader = str(action.get("trader", "unknown"))
+
+        # Increment session counter
+        block_key = (trader, gate_name)
+        self._session_gate_blocks[block_key] += 1
+        block_count = self._session_gate_blocks[block_key]
+
+        alert_data = {
+            "trader": trader,
+            "ticker": ticker,
+            "gate": gate_name,
+            "reason": reason,
+            "session_blocks": block_count,
+        }
+
+        # Always fire p1 for observable gate blocks
+        alert.p1(
+            f"{gate_name} blocked trade for {trader}",
+            alert_data,
+        )
+        metrics.increment(
+            f"gate.block.{gate_name.lower()}",
+            tags={"trader": trader, "ticker": ticker},
+        )
+
+        # Escalate to p0 if threshold breached
+        if block_count >= self._SESSION_ESCALATION_THRESHOLD:
+            alert.p0(
+                f"{trader} hit {gate_name} {block_count}x in session — risk limit breach",
+                alert_data,
+            )
+            metrics.increment(
+                "gate.block.escalated",
+                tags={"trader": trader, "gate": gate_name},
+            )
+
+    def reset_session_blocks(self) -> None:
+        """Reset the per-session gate-block counters (e.g., at session start)."""
+        self._session_gate_blocks.clear()
 
     def evaluate(
         self,
@@ -132,6 +202,7 @@ class RiskManager:
                 if not passed:
                     granted = False
                     final_reason = f"Blocked by {gate_name}: {reason}"
+                    self._fire_gate_block_alert(gate_name, reason, action)
                     break
 
             except Exception as e:
