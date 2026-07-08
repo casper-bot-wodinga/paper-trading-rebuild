@@ -13,7 +13,7 @@ if [ -d "./canvas/app.py" ] || [ -f "./canvas/app.py" ]; then
   echo "Canvas source found locally"
 else
   echo "Canvas source NOT found — please copy from OpenClaw VM first:"
-  echo "  scp -r openclaw@192.168.1.73:~/projects/canvas/* ./canvas/"
+  echo "  scp -r openclaw@192.168.1.41:~/projects/canvas/* ./canvas/"
   exit 1
 fi
 
@@ -21,7 +21,7 @@ if [ -f "./dashboard/src/leaderboard_api.py" ]; then
   echo "Dashboard source found locally"
 else
   echo "Dashboard source NOT found — please copy from OpenClaw VM first:"
-  echo "  scp -r openclaw@192.168.1.73:~/projects/paper-trading-teams/src/leaderboard_api.py ./dashboard/"
+  echo "  scp -r openclaw@192.168.1.41:~/projects/paper-trading-teams/src/leaderboard_api.py ./dashboard/"
   exit 1
 fi
 
