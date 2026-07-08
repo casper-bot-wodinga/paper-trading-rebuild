@@ -206,9 +206,20 @@ CREATE TABLE trading.rotation_log (
 
 ---
 
-## Code
+## Code — What We Reuse
 
-### `src/virtual_runner.py` (~200 lines)
+We already have all the building blocks. The virtual trader system is a thin orchestration layer:
+
+| Existing module | Lines | Reused for |
+|-----------------|-------|------------|
+| `signals.py` | 690 | Call with overridden params → variant signal reports |
+| `llm_engine.py` | 392 | Direct OpenRouter call → BUY/SELL/HOLD |
+| `param_history.py` | 674 | Perturbation logic → generate new variant configs |
+| `prompt_sweep.py` | 1234 | Variant generation → new prompt-based virtuals |
+| `prompt_builder.py` | 305 | Assemble prompt with variant template |
+| `replay.py` | 607 | Nightly integration test on historical data |
+
+### `src/virtual_runner.py` (~150 lines)
 
 ```python
 """
@@ -216,39 +227,59 @@ Runs every 5 min during market hours.
 1. Fetch data bus snapshot
 2. For each active virtual trader:
    a. Load its config overrides
-   b. Apply to signal engine
-   c. Build prompt with overridden signals
-   d. Call LLM (Gemini Flash)
-   e. Parse BUY/SELL/HOLD
-   f. Log to executed_trades (trade_source='virtual')
-3. Also runs the LIVE trader's config for comparison
+   b. Call signals.py with overridden params → signal report
+   c. Call prompt_builder.py with variant prompt → assembled prompt
+   d. Call llm_engine.py → BUY/SELL/HOLD decision
+   e. Log to executed_trades (trade_source='virtual')
 """
 ```
 
-### `src/virtual_rotate.py` (~150 lines)
+### `src/virtual_rotate.py` (~120 lines)
 
 ```python
 """
 Runs at 20:00 ET daily.
-1. Compute today's P&L for all virtuals + LIVE
-2. Rank by P&L
-3. Apply promotion rules (safety guard, minimum trades)
-4. If rotating: update LIVE trader config, log to rotation_log
-5. If keeping: log reason
+1. Query today's P&L for all virtuals + LIVE from Postgres
+2. Award daily win to highest P&L trader
+3. Check: does any challenger have more cumulative wins than main?
+4. If yes → promote, update LIVE config
+5. Log to rotation_log
 """
 ```
 
-### `src/virtual_cull.py` (~100 lines)
+### `src/virtual_cull.py` (~80 lines)
 
 ```python
 """
 Runs Sunday 23:00 ET.
-1. Rank all virtuals by 7-day P&L
+1. Rank virtuals by 7-day P&L
 2. Cull bottom 3
-3. Generate 3 new variants
-4. 2-day probation for new ones
+3. Generate replacements:
+   a. param_history.py → perturb best performer's params
+   b. prompt_sweep.py → generate new prompt variant
+   c. Random safe variant within bounds
+4. New virtuals start on 2-day probation
 """
 ```
+
+### Nightly integration test — `src/virtual_replay_test.py` (~100 lines)
+
+```
+Runs at 01:00 ET (before market open).
+1. Take all active virtual traders
+2. Run them through replay.py on last week's historical data
+3. Verify:
+   - Each virtual completes without crashing
+   - Each virtual produces valid BUY/SELL/HOLD decisions
+   - No NaN P&L, no division by zero, no infinite loops
+4. If a virtual fails replay:
+   → Flag it, exclude from tomorrow's rotation
+   → Log the error for debugging
+5. If ALL virtuals fail replay:
+   → P0 alert: something broke in the pipeline
+```
+
+This catches integration bugs at night instead of during market hours. A virtual that passes daytime live trading AND nighttime historical replay has earned its place.
 
 ---
 
