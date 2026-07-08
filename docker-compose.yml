@@ -28,7 +28,7 @@ services:
   # ── Data Bus (port 5000) ─────────────────────────────────────────────
   data-bus:
     build:
-      context: ./paper-trading-rebuild
+      context: .
       dockerfile: Dockerfile
     container_name: trading-data-bus
     restart: unless-stopped
