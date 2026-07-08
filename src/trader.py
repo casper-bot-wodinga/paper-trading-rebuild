@@ -139,8 +139,7 @@ class Trader:
         self.agent_breaker = get_breaker(trader_id)
 
         # Build sector lookup from fundamentals DB (if available)
-        sector_lookup = self._build_sector_lookup()
-        self.risk_manager = RiskManager(sector_lookup=sector_lookup)
+        self.risk_manager = RiskManager()
         self.stop_loss = StopLossManager()
 
         self.state = TraderState(

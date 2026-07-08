@@ -41,6 +41,8 @@ from src.replay import (
     make_uptrend_ticks,
 )
 from src.signals import SignalEngine, SignalParams
+from src.journal_analyzer import JournalAnalyzer, JournalInsight, analyze_journal
+from src.synthesis import Synthesizer, NightlySummary, synthesize_nightly
 
 log = logging.getLogger("simulator")
 
@@ -81,8 +83,9 @@ class ScenarioResult:
     replay_result: ReplayResult
     objective_score: float
     journal: List[str]
-    elapsed_s: float
-    model_used: str
+    reflections: List[Reflection] = field(default_factory=list)
+    elapsed_s: float = 0.0
+    model_used: str = ""
 
 
 @dataclass
@@ -280,6 +283,7 @@ class SimulationRunner:
             replay_result=replay_result,
             objective_score=score,
             journal=journal,
+            reflections=reflections,
             elapsed_s=time.monotonic() - t0,
             model_used=self.engine.model,
         )
@@ -399,6 +403,107 @@ class SimulationRunner:
         report.results.sort(key=lambda r: r.objective_score, reverse=True)
 
         return report
+
+    def analyze_sweep(self, report: SweepReport) -> List[JournalInsight]:
+        """Run journal analysis on all scenarios in a sweep report.
+
+        Extracts trades from ReplayResult, combines with reflections and journal,
+        and produces ranked insights.
+
+        Args:
+            report: Completed SweepReport.
+
+        Returns:
+            List of JournalInsight sorted by confidence descending.
+        """
+        analyzer = JournalAnalyzer()
+
+        all_trades: List[Dict[str, Any]] = []
+        all_reflections: List[Reflection] = []
+        all_journal: List[str] = []
+
+        for result in report.results:
+            # Extract trades from replay result
+            for trade in result.replay_result.trades:
+                all_trades.append({
+                    "ticker": trade.ticker,
+                    "pnl": trade.pnl,
+                    "regime": "TRENDING_UP" if trade.pnl > 0 else "TRENDING_DOWN",
+                    "conviction": 0.5,
+                    "shares": trade.shares,
+                    "position_pct": abs(trade.shares * trade.entry_price / 100_000.0)
+                    if trade.entry_price > 0 else 0,
+                })
+            all_reflections.extend(result.reflections)
+            all_journal.extend(result.journal)
+
+        insights = analyzer.analyze(
+            journal=all_journal,
+            reflections=all_reflections,
+            trades=all_trades,
+        )
+
+        log.info("Journal analysis: %d insights from %d scenarios (%d trades, %d reflections)",
+                 len(insights), len(report.results), len(all_trades), len(all_reflections))
+
+        return insights
+
+
+def _scenarios_to_trader_dict(scenarios: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Convert a flat scenarios dict to per-trader format for synthesis."""
+    result: Dict[str, Dict[str, Any]] = {}
+    trader = scenarios.get("trader", "kairos")
+    result[trader] = {
+        "n_scenarios": scenarios.get("n_scenarios", 0),
+        "n_trades": scenarios.get("n_trades", 0),
+        "best_score": scenarios.get("best_score", 0.0),
+        "top_variant": scenarios.get("top_variant", ""),
+    }
+    return result
+
+
+def run_nightly_synthesis(
+    trader_insights: Dict[str, List[JournalInsight]],
+    scenarios: Dict[str, Dict[str, Any]],
+    date: Optional[datetime] = None,
+) -> NightlySummary:
+    """Run nightly synthesis across all traders' insights.
+
+    Wraps synthesize_nightly with logging and produces formatted output.
+
+    Args:
+        trader_insights: Dict mapping trader_name → list of JournalInsight.
+        scenarios: Dict mapping trader_name → scenario summary dict.
+        date: Optional date for the summary.
+
+    Returns:
+        NightlySummary ready for markdown formatting.
+    """
+    summary = synthesize_nightly(
+        trader_insights=trader_insights,
+        scenarios=scenarios,
+        date=date,
+    )
+
+    # Log summary
+    log.info(
+        "Nightly synthesis: %d traders, %d insights, %d auto-promoted, %d PR-ready, %d needs validation",
+        summary.n_traders,
+        len(summary.top_insights),
+        summary.n_auto_promoted,
+        summary.n_pr_ready,
+        summary.n_validation,
+    )
+
+    for promo in summary.promotions:
+        if promo["action"] == "AUTO_PROMOTE":
+            log.info(
+                "AUTO-PROMOTED: %s — %s",
+                promo.get("trader", "?"),
+                promo["insight"]["description"],
+            )
+
+    return summary
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -584,9 +689,11 @@ def _cmd_test(args):
 
 
 def _cmd_sweep(args):
-    """Run a sweep."""
+    """Run a sweep, followed by journal analysis and nightly synthesis."""
     traders = ["kairos", "aldridge", "stonks"] if getattr(args, 'all', False) else [args.trader]
     all_reports: List[SweepReport] = []
+    all_insights: Dict[str, List[JournalInsight]] = {}
+    all_scenarios: Dict[str, Dict[str, Any]] = {}
 
     for trader in traders:
         builder = PromptBuilder(trader=trader)
@@ -602,6 +709,39 @@ def _cmd_sweep(args):
         all_reports.append(report)
 
         _print_report(report)
+
+        # ── Journal analysis (Task 3) ───────────────────────────────
+        total_trades = sum(len(r.replay_result.trades) for r in report.results)
+        if total_trades > 0:
+            insights = runner.analyze_sweep(report)
+            all_insights[trader] = insights
+            all_scenarios[trader] = {
+                "trader": trader,
+                "n_scenarios": report.total_scenarios,
+                "n_trades": total_trades,
+                "best_score": report.best_score,
+                "top_variant": report.best_variant_id,
+            }
+            log.info("Trader %s: %d insights generated", trader, len(insights))
+        else:
+            log.info("Trader %s: no trades — skipping journal analysis", trader)
+            all_insights[trader] = []
+            all_scenarios[trader] = {
+                "trader": trader,
+                "n_scenarios": report.total_scenarios,
+                "n_trades": 0,
+                "best_score": 0.0,
+                "top_variant": "",
+            }
+
+    # ── Nightly synthesis (Task 4) ─────────────────────────────────
+    if all_insights:
+        summary = run_nightly_synthesis(all_insights, all_scenarios)
+        formatted = summary.format()
+        print(formatted)
+
+        # Write nightly summary to file
+        _write_nightly_summary(formatted)
 
     if getattr(args, 'json', False):
         print(json.dumps([
@@ -623,10 +763,88 @@ def _cmd_sweep(args):
 
 
 def _cmd_analyze(args):
-    """Analyze past results and generate hypotheses."""
-    print(f"Analyze: {args.trader}")
-    print("(reads from sweep_results table — requires Postgres)")
-    print("TODO: implement after Coder finishes DB layer")
+    """Analyze past results and generate hypotheses.
+
+    Reads the most recent sweep results from Postgres, runs journal analysis
+    and nightly synthesis, and outputs a markdown summary.
+    """
+    from src.db.connection import get_connection
+
+    print(f"=== Learning Loop Analysis: {args.trader} ===\n")
+
+    # Try to analyze from the most recent sweep in the DB
+    trader_insights: Dict[str, List[JournalInsight]] = {}
+    trader_scenarios: Dict[str, Dict[str, Any]] = {}
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Get most recent sweep for each trader
+                traders_to_query = [args.trader] if args.trader != "all" else ["kairos", "aldridge", "stonks"]
+                for trader in traders_to_query:
+                    cur.execute(
+                        """SELECT run_id, trader, total_scenarios, best_score, best_variant_id,
+                                  best_params, started_at
+                           FROM sweep_results
+                           WHERE trader = %s
+                           ORDER BY started_at DESC LIMIT 1""",
+                        (trader,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        trader_scenarios[trader] = {
+                            "trader": trader,
+                            "n_scenarios": row[2] or 0,
+                            "n_trades": 0,  # Will be populated from trade data
+                            "best_score": float(row[3] or 0),
+                            "top_variant": row[4] or "",
+                        }
+                        print(f"  {trader}: {row[2]} scenarios, best score {row[3]:.4f} "
+                              f"({row[4]})")
+                    else:
+                        print(f"  {trader}: no sweep data found")
+
+    except Exception as e:
+        print(f"  (DB not available: {e})")
+        print(f"  Run with --trader kairos to run a test sweep + analysis instead")
+        return
+
+    if not trader_scenarios:
+        print("\nNo sweep data found. Run 'python3 -m src.simulator sweep' first.")
+        return
+
+    # Synthesis — aggregate insights from journal analysis
+    summary = synthesize_nightly(
+        trader_insights=trader_insights,
+        scenarios=trader_scenarios,
+    )
+    print(f"\n{summary.format()}")
+
+
+def _write_nightly_summary(formatted: str, output_dir: Optional[str] = None) -> str:
+    """Write the nightly summary to a markdown file.
+
+    Args:
+        formatted: Markdown-formatted summary string.
+        output_dir: Optional output directory (default: .hermes/reports/).
+
+    Returns:
+        Path to the written file.
+    """
+    if output_dir is None:
+        output_dir = str(Path(__file__).parent.parent / ".hermes" / "reports")
+    os.makedirs(output_dir, exist_ok=True)
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"nightly_summary_{date_str}.md"
+    filepath = os.path.join(output_dir, filename)
+
+    with open(filepath, "w") as f:
+        f.write(formatted)
+        f.write(f"\n\n---\nGenerated at {datetime.now().isoformat()}\n")
+
+    log.info("Nightly summary written to %s", filepath)
+    return filepath
 
 
 def _print_report(report: SweepReport):
