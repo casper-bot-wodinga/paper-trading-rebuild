@@ -494,6 +494,13 @@ class Trader:
         if prev > 0:
             self.state.return_history.append((self.state.equity - prev) / prev)
 
+        # Emit portfolio gauges for observability dashboards
+        trader_tag = {"trader": self.trader_id}
+        metrics.gauge("trader.portfolio.equity", self.state.equity)
+        metrics.gauge("trader.portfolio.cash", self.state.cash)
+        metrics.gauge("trader.portfolio.position_count", float(len(self.state.positions)))
+        metrics.gauge("trader.portfolio.drawdown_pct", float(self.state.drawdown * 100))
+
     def update_position_prices(self, prices: Dict[str, float]) -> None:
         """Update mark-to-market prices for open positions."""
         for ticker, price in prices.items():

@@ -23,7 +23,6 @@ import psycopg2
 
 from src.db.connection import (
     get_connection,
-    insert_bar,
     insert_bars_batch,
 )
 

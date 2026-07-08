@@ -46,6 +46,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config_loader import get_config
+from src.observability import alert, metrics
 
 log = logging.getLogger("circuit_breaker")
 
@@ -331,6 +332,20 @@ class AgentCircuitBreaker:
             self.trader_id, self.state.total_trips, reason,
         )
 
+        alert.p0(
+            f"Circuit breaker tripped: {self.trader_id}",
+            {
+                "trader_id": self.trader_id,
+                "trip_count": self.state.total_trips,
+                "reason": reason,
+                "tick_call_count": len(tick.calls) if tick else 0,
+            },
+        )
+        metrics.increment("circuit_breaker.trips", tags={
+            "trader": self.trader_id,
+            "trip_total": str(self.state.total_trips),
+        })
+
         # Persist to risk_state
         try:
             _upsert_risk_state_sync(
@@ -419,6 +434,16 @@ def guard_tick(trader_id: str, ticker: str = "") -> dict:
             "[%s] Tick BLOCKED: trader paused (reason=%s, trip_count=%d)",
             trader_id, reason, status["total_trips"],
         )
+        alert.p1(
+            f"Tick blocked: {trader_id}",
+            {
+                "trader_id": trader_id,
+                "ticker": ticker,
+                "reason": reason or "Circuit breaker tripped",
+                "trip_count": status["total_trips"],
+            },
+        )
+        metrics.increment("circuit_breaker.tick_blocked", tags={"trader": trader_id})
         return {
             "allowed": False,
             "reason": reason or "Circuit breaker tripped",

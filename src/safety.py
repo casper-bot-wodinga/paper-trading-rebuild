@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("safety")
 
+from src.observability import alert, metrics
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Circuit Breaker (§8)
@@ -162,10 +164,44 @@ class CircuitBreaker:
         return BreakerLevel.NORMAL
 
     def _transition(self, old: BreakerLevel, new: BreakerLevel) -> None:
-        """Handle level transition — log and timestamp."""
-        msg = f"[{self.trader_id}] Breaker: {old.value} → {new.value} (DD={self.state.current_drawdown:.1%})"
+        """Handle level transition — log, timestamp, and fire observability alerts."""
+        dd = self.state.current_drawdown
+        msg = f"[{self.trader_id}] Breaker: {old.value} → {new.value} (DD={dd:.1%})"
         log.warning(msg)
         self.state.journal.append(msg)
+
+        # Fire observability alerts based on severity
+        if new in (BreakerLevel.PAUSED, BreakerLevel.EMERGENCY):
+            alert.p0(
+                f"Drawdown breach: {self.trader_id} → {new.value}",
+                {
+                    "trader_id": self.trader_id,
+                    "level": new.value,
+                    "previous_level": old.value,
+                    "drawdown_pct": round(dd * 100, 2),
+                    "peak_equity": round(self.state.peak_equity, 2),
+                    "consecutive_losses": self.state.consecutive_losses,
+                },
+            )
+            metrics.increment("drawdown.breach", tags={
+                "trader": self.trader_id,
+                "level": new.value,
+            })
+        elif new == BreakerLevel.CAUTION:
+            alert.p1(
+                f"Drawdown approaching limits: {self.trader_id}",
+                {
+                    "trader_id": self.trader_id,
+                    "level": new.value,
+                    "previous_level": old.value,
+                    "drawdown_pct": round(dd * 100, 2),
+                    "peak_equity": round(self.state.peak_equity, 2),
+                    "consecutive_losses": self.state.consecutive_losses,
+                },
+            )
+            metrics.increment("drawdown.caution", tags={
+                "trader": self.trader_id,
+            })
 
         if new == BreakerLevel.PAUSED:
             self.state.paused_at = datetime.now()
