@@ -265,8 +265,28 @@ class Trader:
                           tags={"trader": self.trader_id})
 
         # 1. Signal engine: compute indicators
-        signal: SignalReport = self.signal_engine.process(tick)
-        self.breaker.update(self.state.equity)
+        try:
+            signal: SignalReport = self.signal_engine.process(tick)
+        except Exception as exc:
+            log.error("[%s] Signal engine failed for %s: %s", self.trader_id, ticker, exc)
+            alert.p1(
+                f"Signal engine error: {self.trader_id}",
+                {"trader_id": self.trader_id, "ticker": ticker, "error": str(exc)},
+            )
+            metrics.increment("trader.error.signal_engine",
+                              tags={"trader": self.trader_id, "ticker": ticker})
+            return None
+
+        try:
+            self.breaker.update(self.state.equity)
+        except Exception as exc:
+            log.error("[%s] Drawdown breaker update failed: %s", self.trader_id, exc)
+            metrics.increment("trader.error.breaker_update",
+                              tags={"trader": self.trader_id, "ticker": ticker})
+            # Cannot assess risk — block this tick
+            self._journal(tick, signal, "BLOCKED", f"Breaker update error: {exc}")
+            return None
+
         if not self.breaker.state.can_trade:
             self._journal(tick, signal, "BLOCKED", f"Breaker: {self.breaker.state.level.value}")
             self.agent_breaker.mark_decision()  # drawdown breaker is a valid stop
@@ -275,31 +295,54 @@ class Trader:
             return None
 
         # 2. STOP-LOSS CHECK — enforce before any new trade decisions
-        breached = self.stop_loss.check_all(
-            positions=self.state.positions,
-            current_prices={tick.ticker: price},
-        )
+        try:
+            breached = self.stop_loss.check_all(
+                positions=self.state.positions,
+                current_prices={tick.ticker: price},
+            )
+        except Exception as exc:
+            log.error("[%s] Stop-loss check_all failed: %s", self.trader_id, exc)
+            alert.p1(
+                f"Stop-loss check failed: {self.trader_id}",
+                {"trader_id": self.trader_id, "ticker": tick.ticker, "error": str(exc)},
+            )
+            metrics.increment("trader.error.stop_loss_check",
+                              tags={"trader": self.trader_id})
+            breached = []
+
         for breach in breached:
             bt = breach["ticker"]
             if bt in self.state.positions:
                 pos = self.state.positions[bt]
-                sell_decision = TraderDecision(
-                    ticker=bt,
-                    decision="SELL",
-                    shares=pos["shares"],
-                    conviction=1.0,
-                    rationale=f"Stop-loss ({breach['stop_type']}): {breach['reason']}",
-                )
-                self._simulate_fill(tick, sell_decision)
-                self._journal(tick, signal, "SELL", sell_decision.rationale)
-                self.stop_loss.record_exit(bt)
-                metrics.increment("trader.stop_loss.triggered",
-                                  tags={"trader": self.trader_id, "ticker": bt,
-                                        "stop_type": breach.get("stop_type", "unknown")})
-                log.warning(
-                    "[%s] STOP-LOSS triggered: %s",
-                    self.trader_id, sell_decision.rationale,
-                )
+                try:
+                    sell_decision = TraderDecision(
+                        ticker=bt,
+                        decision="SELL",
+                        shares=pos["shares"],
+                        conviction=1.0,
+                        rationale=f"Stop-loss ({breach['stop_type']}): {breach['reason']}",
+                    )
+                    self._simulate_fill(tick, sell_decision)
+                    self._journal(tick, signal, "SELL", sell_decision.rationale)
+                    self.stop_loss.record_exit(bt)
+                    metrics.increment("trader.stop_loss.triggered",
+                                      tags={"trader": self.trader_id, "ticker": bt,
+                                            "stop_type": breach.get("stop_type", "unknown")})
+                    log.warning(
+                        "[%s] STOP-LOSS triggered: %s",
+                        self.trader_id, sell_decision.rationale,
+                    )
+                except Exception as exc:
+                    log.error(
+                        "[%s] Stop-loss execution failed for %s: %s",
+                        self.trader_id, bt, exc,
+                    )
+                    alert.p1(
+                        f"Stop-loss execution failed: {self.trader_id}",
+                        {"trader_id": self.trader_id, "ticker": bt, "error": str(exc)},
+                    )
+                    metrics.increment("trader.error.stop_loss_exec",
+                                      tags={"trader": self.trader_id, "ticker": bt})
 
         # 3. Position sizing: apply breaker multiplier + warmup reduction
         size_mult = self.breaker.state.position_multiplier
@@ -307,10 +350,20 @@ class Trader:
             size_mult *= 0.5  # half size during warmup
 
         # 4. Make decision
-        if self._decider:
-            decision = self._decider(tick, signal, self.state, market_context)
-        else:
-            decision = self._default_decider(tick, signal)
+        try:
+            if self._decider:
+                decision = self._decider(tick, signal, self.state, market_context)
+            else:
+                decision = self._default_decider(tick, signal)
+        except Exception as exc:
+            log.error("[%s] Decider failed for %s: %s", self.trader_id, ticker, exc)
+            alert.p1(
+                f"Decider error: {self.trader_id}",
+                {"trader_id": self.trader_id, "ticker": ticker, "error": str(exc)},
+            )
+            metrics.increment("trader.error.decider",
+                              tags={"trader": self.trader_id, "ticker": ticker})
+            return None
 
         if decision is None or decision.decision == "HOLD":
             self._journal(tick, signal, "HOLD", "No signal or conviction too low")
@@ -320,54 +373,83 @@ class Trader:
             return None
 
         # 5. Apply position sizing
-        if decision.decision == "BUY":
-            max_cost = self.state.equity * signal.recommended_size_pct * size_mult
-            decision.shares = int(max_cost / price) if price > 0 else 0
+        try:
+            if decision.decision == "BUY":
+                max_cost = self.state.equity * signal.recommended_size_pct * size_mult
+                decision.shares = int(max_cost / price) if price > 0 else 0
+        except Exception as exc:
+            log.error("[%s] Position sizing failed for %s: %s", self.trader_id, ticker, exc)
+            metrics.increment("trader.error.position_sizing",
+                              tags={"trader": self.trader_id, "ticker": ticker})
+            decision.shares = 0
 
         # 5a. Risk gate evaluation (concentration, sector, exposure, cash, PDT)
         if decision.decision == "BUY":
-            risk_action = self._decision_to_action(decision, tick)
-            risk_context = self._build_risk_context()
-            granted, reason, gate_results = self.risk_manager.evaluate(
-                action=risk_action,
-                portfolio=risk_context,
-                positions=list(risk_context.get("positions", [])),
-                timestamp=getattr(tick, "timestamp", None),
-            )
-            if not granted:
-                log.warning("[%s] Risk gate blocked %s: %s", self.trader_id, ticker, reason)
-                self._journal(tick, signal, "BLOCKED", reason)
-                self.agent_breaker.mark_decision()  # blocked is a valid outcome
-                metrics.increment("trader.decision.blocked",
-                                  tags={"trader": self.trader_id, "gate": "risk_manager",
-                                        "ticker": ticker})
+            try:
+                risk_action = self._decision_to_action(decision, tick)
+                risk_context = self._build_risk_context()
+                granted, reason, gate_results = self.risk_manager.evaluate(
+                    action=risk_action,
+                    portfolio=risk_context,
+                    positions=list(risk_context.get("positions", [])),
+                    timestamp=getattr(tick, "timestamp", None),
+                )
+                if not granted:
+                    log.warning("[%s] Risk gate blocked %s: %s", self.trader_id, ticker, reason)
+                    self._journal(tick, signal, "BLOCKED", reason)
+                    self.agent_breaker.mark_decision()  # blocked is a valid outcome
+                    metrics.increment("trader.decision.blocked",
+                                      tags={"trader": self.trader_id, "gate": "risk_manager",
+                                            "ticker": ticker})
+                    return None
+            except Exception as exc:
+                log.error("[%s] Risk gate evaluation failed for %s: %s", self.trader_id, ticker, exc)
+                metrics.increment("trader.error.risk_gate",
+                                  tags={"trader": self.trader_id, "ticker": ticker})
+                decision.shares = 0
                 return None
 
-        # 6. Execute (simulated in paper; real would call Alpaca)
-        self._simulate_fill(tick, decision)
+        # 6. Execute (simulated in paper; real would call Alpaca) + post-fill steps
+        try:
+            self._simulate_fill(tick, decision)
 
-        # 7. Metrics on trade decision
-        decision_type = decision.decision.lower()
-        metrics.increment(
-            f"trader.decision.{decision_type}",
-            tags={"trader": self.trader_id, "ticker": ticker},
-        )
-        metrics.increment("trader.tick.processed",
-                          tags={"trader": self.trader_id})
+            # 7. Metrics on trade decision
+            decision_type = decision.decision.lower()
+            metrics.increment(
+                f"trader.decision.{decision_type}",
+                tags={"trader": self.trader_id, "ticker": ticker},
+            )
+            metrics.increment("trader.tick.processed",
+                              tags={"trader": self.trader_id})
 
-        # 7. Journal
-        self._journal(tick, signal, decision.decision, decision.rationale)
+            # 8. Journal
+            self._journal(tick, signal, decision.decision, decision.rationale)
 
-        # 8. Warmup check
-        if self.state.mode == TraderMode.WARMUP:
-            self.state.warmup_ticks_remaining -= 1
-            if self.state.ready_for_live:
-                self.state.mode = TraderMode.LIVE
-                log.info("[%s] Exiting warmup — going LIVE", self.trader_id)
+            # 9. Warmup check
+            if self.state.mode == TraderMode.WARMUP:
+                self.state.warmup_ticks_remaining -= 1
+                if self.state.ready_for_live:
+                    self.state.mode = TraderMode.LIVE
+                    log.info("[%s] Exiting warmup — going LIVE", self.trader_id)
 
-        # 9. Mark decision made — prevents timeout gate from tripping
-        self.agent_breaker.mark_decision()
-        return decision
+            # 10. Mark decision made — prevents timeout gate from tripping
+            self.agent_breaker.mark_decision()
+            return decision
+
+        except Exception as exc:
+            log.error("[%s] Trade execution failed for %s: %s", self.trader_id, ticker, exc)
+            alert.p1(
+                f"Trade execution error: {self.trader_id}",
+                {
+                    "trader_id": self.trader_id,
+                    "ticker": ticker,
+                    "decision": decision.decision,
+                    "error": str(exc),
+                },
+            )
+            metrics.increment("trader.error.execution",
+                              tags={"trader": self.trader_id, "ticker": ticker})
+            return None
 
     def _default_decider(
         self, tick: Any, signal: SignalReport
@@ -514,23 +596,28 @@ class Trader:
         self, tick: Any, signal: SignalReport,
         decision: str, rationale: str,
     ) -> None:
-        entry = TraderJournal(
-            timestamp=tick.timestamp if hasattr(tick, "timestamp") else datetime.now(),
-            ticker=tick.ticker,
-            price=tick.close,
-            regime=signal.regime,
-            signal_composite=signal.composite_signal,
-            signal_conviction=signal.conviction,
-            breaker_level=self.breaker.state.level.value,
-            decision=decision,
-            rationale=rationale,
-            position_count=len(self.state.positions),
-            equity=self.state.equity,
-            drawdown=self.state.drawdown,
-        )
-        self.state.journal.append(entry)
-        if len(self.state.journal) > self.max_journal_entries:
-            self.state.journal.pop(0)
+        try:
+            entry = TraderJournal(
+                timestamp=tick.timestamp if hasattr(tick, "timestamp") else datetime.now(),
+                ticker=tick.ticker,
+                price=tick.close,
+                regime=signal.regime,
+                signal_composite=signal.composite_signal,
+                signal_conviction=signal.conviction,
+                breaker_level=self.breaker.state.level.value,
+                decision=decision,
+                rationale=rationale,
+                position_count=len(self.state.positions),
+                equity=self.state.equity,
+                drawdown=self.state.drawdown,
+            )
+            self.state.journal.append(entry)
+            if len(self.state.journal) > self.max_journal_entries:
+                self.state.journal.pop(0)
+        except Exception as exc:
+            log.error("[%s] Journal write failed: %s", self.trader_id, exc)
+            metrics.increment("trader.error.journal",
+                              tags={"trader": self.trader_id})
 
     def recent_journal(self, n: int = 10) -> List[TraderJournal]:
         """Get last N journal entries."""
