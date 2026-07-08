@@ -1,11 +1,30 @@
 # Paper Trading Services — docker.klo deployment
-# Deploy from paper-trading-rebuild root:
-#   scp docker-compose.yml raf@docker.klo:~/trading/
-#   rsync -avz ./paper-trading-rebuild/ raf@docker.klo:~/trading/paper-trading-rebuild/
-#   rsync -avz ./paper-trading-teams/ raf@docker.klo:~/trading/paper-trading-teams/
-#   ssh raf@docker.klo 'cd ~/trading && docker compose up -d --build'
+# Core trading stack only. Canvas + chat-bridge are separate general services.
 
 services:
+  # ── Postgres (port 5433 external → 5432 internal) ────────────────────
+  trading-db:
+    image: pgvector/pgvector:pg15
+    container_name: trading-db
+    restart: unless-stopped
+    dns:
+      - 192.168.1.25
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=trading
+      - POSTGRES_USER=trader
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - trading_pgdata:/var/lib/postgresql/data
+      - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "trader", "-d", "trading"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # ── Data Bus (port 5000) ─────────────────────────────────────────────
   data-bus:
     build:
@@ -15,24 +34,35 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"
+    dns:
+      - 192.168.1.25
     environment:
       - PYTHONUNBUFFERED=1
-      - APCA_API_KEY_ID=${APCA...-}
-      - APCA_API_SECRET_KEY=${APCA...-}
-      - KAIROS_API_KEY=${KAIR...-}
-      - KAIROS_SECRET_KEY=${KAIR...-}
-      - ALDRIDGE_API_KEY=${ALDR...-}
-      - ALDRIDGE_SECRET_KEY=${ALDR...-}
-      - STONKS_API_KEY=${STON...-}
-      - STONKS_SECRET_KEY=${STON...-}
-      - FINNHUB_API_KEY=${FINN...-}
-      - FRED_API_KEY=${FRED...-}
-      - OPENROUTER_API_KEY=${OPEN...-}
+      - ALPACA_KAIROS_KEY=${ALPACA_KAIROS_KEY}
+      - ALPACA_KAIROS_SECRET=${ALPACA_KAIROS_SECRET}
+      - ALPACA_ALDRIDGE_KEY=${ALPACA_ALDRIDGE_KEY}
+      - ALPACA_ALDRIDGE_SECRET=${ALPACA_ALDRIDGE_SECRET}
+      - ALPACA_STONKS_KEY=${ALPACA_STONKS_KEY}
+      - ALPACA_STONKS_SECRET=${ALPACA_STONKS_SECRET}
+      - KAIROS_API_KEY=${KAIROS_API_KEY}
+      - KAIROS_SECRET_KEY=${KAIROS_SECRET_KEY}
+      - ALDRIDGE_API_KEY=${ALDRIDGE_API_KEY}
+      - ALDRIDGE_SECRET_KEY=${ALDRIDGE_SECRET_KEY}
+      - STONKS_API_KEY=${STONKS_API_KEY}
+      - STONKS_SECRET_KEY=${STONKS_SECRET_KEY}
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY}
+      - FRED_API_KEY=${FRED_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ALPHA_VANTAGE_KEY=${ALPHA_VANTAGE_KEY}
+      - PGHOST=trading-db
       - MCP_PORT=5001
     volumes:
       - data-bus-cache:/app/shared
     working_dir: /app
     command: python3 src/data_bus.py --port 5000 --host 0.0.0.0
+    depends_on:
+      trading-db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 60s
@@ -49,11 +79,16 @@ services:
     restart: unless-stopped
     ports:
       - "5004:5004"
+    dns:
+      - 192.168.1.25
     environment:
       - PG_DSN=host=trading-db port=5432 dbname=trading user=trader
       - PYTHONUNBUFFERED=1
     working_dir: /app
     command: python3 src/pg_dashboard.py
+    depends_on:
+      trading-db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5004/api/summary"]
       interval: 60s
@@ -61,43 +96,9 @@ services:
       retries: 3
       start_period: 10s
 
-  # ── Chat Bridge (port 8080, exposed as 8644) ─────────────────────────
-  chat-bridge:
-    build:
-      context: ../paper-trading-teams
-      dockerfile: Dockerfile.chat-bridge
-    container_name: trading-chat-bridge
-    restart: unless-stopped
-    ports:
-      - "8644:8080"
-      - "8081:8081"
-    environment:
-      - CHAT_HOST=0.0.0.0
-      - CHAT_PORT=8080
-      - CHAT_UI_PORT=8081
-      - HERMES_URL=http://192.168.1.131:8080/send
-      - HERMES_CHAT_TOKEN=${HERM...-}
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - chat-data:/app/shared
-    working_dir: /app
-    command: python3 src/chat-server.py
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-  # Canvas — already running, just network-attached
-  canvas:
-    image: ghcr.io/tesselation-studios/canvas:latest
-    container_name: trading-canvas
-    restart: unless-stopped
-
 volumes:
   data-bus-cache:
-  chat-data:
+  trading_pgdata:
 
 networks:
   default:
