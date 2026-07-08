@@ -148,7 +148,7 @@ class Trader:
             cash=initial_balance,
         )
 
-        # Decision function — can be swapped for LLM agent or Q-learning
+        # Decision function — can be swapped for LLM agent or virtual trader variant
         self._decider: Optional[Callable] = None
 
     def _build_sector_lookup(self) -> Optional[Callable[[str], Optional[str]]]:
@@ -349,7 +349,7 @@ class Trader:
     def _default_decider(
         self, tick: Any, signal: SignalReport
     ) -> Optional[TraderDecision]:
-        """Default rule-based decider. Replace with LLM agent or Q-learning.
+        """Default rule-based decider. Replace with LLM agent or virtual trader variant.
 
         Simple rules:
           - Composite > 0.3 AND conviction > 0.3 → BUY
@@ -382,7 +382,7 @@ class Trader:
         )
 
     def set_decider(self, fn: Callable) -> None:
-        """Replace the decision function (e.g., with LLM agent or Q-learning)."""
+        """Replace the decision function (e.g., with LLM agent or virtual trader variant)."""
         self._decider = fn
 
     def track_tool_call(self, tool_name: str, args: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
