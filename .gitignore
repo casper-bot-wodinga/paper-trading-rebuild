@@ -7,3 +7,4 @@ dist/
 *.egg-info/
 .venv/
 reports/
+.tasks/orchestrator_state.json
