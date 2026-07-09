@@ -57,10 +57,11 @@ log = logging.getLogger("virtual_runner")
 _config: Dict[str, Any] = {
     "db_dsn": os.getenv("VT_DB_DSN", "host=docker.klo port=5433 dbname=trading user=trader"),
     "data_bus_url": os.getenv("VT_DATA_BUS_URL", "http://docker.klo:5000"),
-    "model": os.getenv("VT_MODEL", "google/gemini-2.5-flash-lite"),
+    "model": os.getenv("VT_MODEL", "google/gemini-3.5-flash"),
     "interval": 300,  # seconds (5 min)
     "max_parallel": int(os.getenv("VT_MAX_PARALLEL", "24")),
     "starting_cash": float(os.getenv("VT_STARTING_CASH", "10000")),
+    "offline": os.getenv("VT_OFFLINE", "0") in ("1", "true", "True"),
 }
 
 # Market hours (ET)
@@ -96,6 +97,22 @@ def is_market_hours() -> bool:
 
 def fetch_quotes(symbols: List[str]) -> Dict[str, dict]:
     """Fetch live quotes from the data bus."""
+    if _config.get("offline"):
+        return {
+            symbol: {
+                "open": 150.0,
+                "high": 152.0,
+                "low": 149.0,
+                "price": 151.0,
+                "volume": 1000000,
+                "rsi": 50.0,
+                "momentum": 0.05,
+                "volatility": 0.15,
+                "regime": "bull_quiet",
+            }
+            for symbol in symbols
+        }
+
     if not symbols:
         return {}
 
@@ -111,6 +128,16 @@ def fetch_quotes(symbols: List[str]) -> Dict[str, dict]:
 
 def fetch_momentum_signals(symbols: List[str]) -> Dict[str, dict]:
     """Fetch pre-computed momentum signals from the data bus."""
+    if _config.get("offline"):
+        return {
+            symbol: {
+                "rsi": 52.0,
+                "momentum": 0.04,
+                "regime": "bull_quiet",
+            }
+            for symbol in symbols
+        }
+
     if not symbols:
         return {}
 
@@ -126,6 +153,8 @@ def fetch_momentum_signals(symbols: List[str]) -> Dict[str, dict]:
 
 def get_tracked_symbols() -> List[str]:
     """Get list of tracked symbols from the data bus health endpoint."""
+    if _config.get("offline"):
+        return ["SPY", "AAPL", "NVDA", "MSFT"]
     try:
         with urllib.request.urlopen(f"{_config['data_bus_url']}/health", timeout=5) as resp:
             data = json.loads(resp.read().decode())
@@ -161,6 +190,29 @@ def load_virtual_traders(names: Optional[List[str]] = None) -> List[Dict[str, An
         List of virtual trader rows with id, name, base_trader, variant_type,
         config, and status.
     """
+    if _config.get("offline"):
+        all_vt = [
+            {
+                "id": "vt-mock-1",
+                "name": "kairos-looser",
+                "base_trader": "kairos",
+                "variant_type": "looser",
+                "config": {"rsi_period": 14},
+                "status": "active"
+            },
+            {
+                "id": "vt-mock-2",
+                "name": "trader-kairos",
+                "base_trader": "kairos",
+                "variant_type": "base",
+                "config": {},
+                "status": "active"
+            }
+        ]
+        if names:
+            return [v for v in all_vt if v["name"] in names]
+        return all_vt
+
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -201,6 +253,15 @@ def insert_trade(
     For BUY/SELL decisions we record the entry. P&L is computed later
     when the position is closed (by the live trader system or virtual_rotate).
     """
+    if _config.get("offline"):
+        trade_id = f"vt-mock-{uuid.uuid4().hex[:12]}"
+        log.info(
+            "OFFLINE TRADE (NO DB) | trader=%s | ticker=%s | decision=%s | conv=%.2f | source=%s | signal=%.2f",
+            trader_id, ticker, decision, conviction, trade_source,
+            signal_score or 0.0,
+        )
+        return trade_id
+
     conn = get_db()
     cur = conn.cursor()
     trade_id = f"vt-{uuid.uuid4().hex[:12]}"
@@ -612,6 +673,10 @@ def main():
         help="Run one cycle and exit"
     )
     parser.add_argument(
+        "--offline", action="store_true",
+        help="Run in offline mode with mock data and no DB connection"
+    )
+    parser.add_argument(
         "--virtuals", type=str, default=None,
         help="Comma-separated list of virtual trader names to run "
              "(default: all active from DB)"
@@ -654,6 +719,7 @@ def main():
         "interval": args.interval,
         "max_parallel": args.parallel,
         "starting_cash": args.starting_cash,
+        "offline": args.offline or _config.get("offline", False),
     })
 
     # Logging setup
