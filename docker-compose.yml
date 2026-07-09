@@ -96,6 +96,29 @@ services:
       retries: 3
       start_period: 10s
 
+  # ── Virtual Runner ───────────────────────────────────────────────────
+  virtual-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-virtual-runner
+    restart: unless-stopped
+    dns:
+      - 192.168.1.25
+    environment:
+      - VT_DB_DSN=host=trading-db port=5432 dbname=trading user=trader
+      - VT_DATA_BUS_URL=http://data-bus:5000
+      - VT_MODEL=google/gemini-3.5-flash
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - PYTHONUNBUFFERED=1
+    working_dir: /app
+    command: python3 src/virtual_runner.py
+    depends_on:
+      trading-db:
+        condition: service_healthy
+      data-bus:
+        condition: service_healthy
+
 volumes:
   data-bus-cache:
   trading_pgdata:
