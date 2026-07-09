@@ -7,6 +7,8 @@
 > **Success criterion:** 90-day rolling Calmar ratio > SPY buy-and-hold, with max drawdown < 15%.
 > **Last updated:** 2026-07-09
 
+> **Companion specs:** `COMPETITION.md` — tournament rules, virtual trader pipeline, multi-timeframe evaluation, news discovery, reflection loop
+>
 > **META-SPEC compliance:**
 > - **Purpose** — see below
 > - **Architecture** — §1
@@ -313,6 +315,33 @@ Separate from trading ticks. Each trader has ONE persistent OpenClaw session tha
 Changes proposed in journals are reviewed overnight by Hermes + Casper. If approved, the prompt template (`prompts/{trader}.txt`) is updated and takes effect the next trading day. Prompts NEVER change mid-day.
 
 **Circuit breaker:** Max 50 turns per heartbeat session. After 50, self-terminates and respawns. Prevents long-session drift.
+
+#### The Three-Step Reflection Loop
+
+Each heartbeat session follows a three-step reflection process (detailed in [`COMPETITION.md §C6`](./COMPETITION.md#c6-three-step-reflection-loop)):
+
+**Step 1 — Raw Logging (during trading):**
+- Market sentiment: numeric 1-10
+- Position confidence: numeric 1-10 per holding
+- Needs, blockers, other thoughts
+- Log numerical values for training data
+
+**Step 2 — Journal Reflection (at HEARTBEAT):**
+- Distill recent entries into overarching themes
+- Sentiment trends and dominant moods
+- Core values check: did decisions align with stated strategy?
+- Describe current strategy IN THEIR OWN WORDS
+
+**Step 3 — Actionable Synthesis (at HEARTBEAT):**
+- What's going well → continue
+- What's not going well → change
+- What's blocking trading (specific errors)
+- Lessons learned backed by objective metrics:
+  - P&L (daily, weekly, total)
+  - Win rate, drawdown, trade count
+  - Confidence accuracy (did high-conviction trades outperform?)
+
+Output feeds into the learning loop. See `COMPETITION.md §C6` for full format and per-trader deployment status.
 
 #### Cold Start Overhead Eliminated
 
@@ -650,7 +679,13 @@ If a parameter is changed and then reverted within 20 days, the change budget fo
 
 ### 13.1 Git-Based Prompt Versioning
 
-Prompts live in the agents repo (`casper-bot-wodinga/paper-trading-agents`). Every version is a git commit. Branching is how we experiment; merging is how we promote.
+Prompts live in the prompts repo (`Tesselation-Studios/paper-trading-prompts`). Every version is a git commit. Branching is how we experiment; merging is how we promote.
+
+**Branch-per-variant model** (detailed in [`COMPETITION.md §C2.6`](./COMPETITION.md#c26-git-branching-strategy)):
+- Each virtual trader operates on its own git branch
+- Branches enable correlation analysis: which prompt phrasing → best P&L?
+- Auto-pruning: sweep branches deleted after 7 days, experiment branches after 14
+- Tags are immutable release history
 
 ```
 agents/
@@ -999,6 +1034,22 @@ Step 10: Agent Journal
 - Given: Kairos posts observation to /signals
 - When: Aldridge's next tick reads /signals
 - Then: Kairos's observation appears in Aldridge's context
+
+---
+
+## §21 — Competition & Tournament
+
+The tournament framework is specified in [`COMPETITION.md`](./COMPETITION.md). Key reference points:
+
+- **§C1 — Tournament Rules:** Start capital, prize structure, phases, expanding universe, leaderboard
+- **§C2 — Virtual Trader Pipeline:** Championship belt model, promotion pipeline, daily cycle, 24-variant startup matrix
+- **§C3 — Multi-Timeframe Evaluation:** 1d/5d/20d/90d windows, promotion thresholds per window
+- **§C4 — News Discovery:** Trader-driven news research, data bus endpoints, training signal
+- **§C5 — Data Flow Architecture:** Data bus as the sole front for Postgres
+- **§C6 — Three-Step Reflection Loop:** Detailed log→reflect→synthesize process
+- **§C7 — Immediate Next Steps:** Checklist tracked in GitHub Issues #80-#88
+
+All references to tournament rules, virtual trader competition, and promotion pipeline defer to `COMPETITION.md`.
 
 ---
 
