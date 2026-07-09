@@ -2,10 +2,10 @@
 
 > **META-SPEC**: [ai-project-system v0.22](https://github.com/openclaw/openclaw/blob/main/docs/ai-project-system/META-SPEC.md)
 > **Repo**: `Tesselation-Studios/paper-trading-rebuild`
-> **Status:** Built + evolving — traders live, learning loop active, Postgres migration in progress
+> **Status:** Built + evolving — traders live, learning loop active, Postgres migration complete (PG reader switch done)
 > **Goal:** Three AI traders (Kairos, Aldridge, Stonks) that measurably improve over time through two-speed learning, validated by rigorous out-of-sample testing, running on distributed hardware.
 > **Success criterion:** 90-day rolling Calmar ratio > SPY buy-and-hold, with max drawdown < 15%.
-> **Last updated:** 2026-07-06
+> **Last updated:** 2026-07-09
 
 > **META-SPEC compliance:**
 > - **Purpose** — see below
@@ -112,6 +112,26 @@ These cannot be violated. All code and PRs are audited against them.
 
 ---
 
+### 1.4 Agent Communication
+
+Native webhooks power the bidirectional agent-to-agent communication layer:
+
+| Endpoint | Host | Purpose |
+|----------|------|---------|
+| `/hooks/wake` | OpenClaw (.41:18789) | Receives inbound messages from Hermes |
+| `/hooks/agent` | OpenClaw (.41:18789) | Agent-to-agent dispatch, shared auth token |
+| `POST /webhooks/main` | Hermes (.131: hermes-agent.nousresearch.com) | Casper → Hermes outbound |
+
+**Bidirectional flow:**
+- **Casper → Hermes:** POST to `hermes-agent.nousresearch.com/webhooks/main` with shared token
+- **Hermes → Casper:** POST to `openclaw:18789/hooks/wake` with shared token
+
+**Chat bridge (fallback):** `localhost:8644` serves as a secondary communication channel when webhooks are unavailable.
+
+**Message persistence:** All agent-to-agent messages are stored in the `hermes_inbox` table within the shared database (`shared/trader.db`). This enables message auditing, replay, and offline catch-up.
+
+---
+
 ## §2 — Objective Function
 
 ### 2.1 Metrics
@@ -215,6 +235,24 @@ Constraints:
 - Max parameter change per tick: 5% of range
 - Minimum 3 ticks between changes to the same parameter
 - All changes logged with before/after scores
+
+### 3.3 XGBoost Momentum Classifier
+
+**Trained Jul 9, 2026** — predicts whether a given momentum signal will produce a winning trade.
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | 78% |
+| ROC-AUC | 0.82 |
+| Model file | `models/xgboost_momentum.pkl` |
+
+**Top features:**
+1. `RSI` — relative strength index (dominant predictor)
+2. `momentum_composite` — blended momentum score across lookbacks
+3. `volume_ratio` — current volume vs 20-day average
+4. `regime_prob_sustainable` — HMM sustainable regime probability
+
+**Caveat:** Precision and recall are low due to severe class imbalance (only ~22% of trades are winners). The model is used as a secondary signal gate — it flags trades with high predicted win probability rather than rejecting outright. When the XGBoost score is below 0.25, position size is halved.
 
 ---
 
@@ -1112,6 +1150,26 @@ The LLM trader's context includes: "PC1 is at +1.2σ (risk-on), PC2 at -0.8σ (v
 
 Both the rule-based (§5) and unsupervised (§24) regime detectors run in parallel. The objective function evaluates which produces better regime-tagged performance. Over time, the system may shift weight toward the better detector or ensemble them.
 
+### 24.4 Hidden Markov Model — Momentum Regime
+
+**Trained Jul 9, 2026** — 501 trading days of SPY data with RSI, momentum score, and volume features.
+
+| Metric | Value |
+|--------|-------|
+| Training window | 501 trading days (~2 years) |
+| Sustainable win rate | 74.3% |
+| Model file | `state/momentum_regime_model.pkl` |
+| States discovered | 2 (sustainable, non-sustainable) |
+
+**Transition matrix:**
+
+| From \ To | Sustainable | Non-Sustainable |
+|-----------|-------------|-----------------|
+| Sustainable | 0.91 | 0.09 |
+| Non-Sustainable | 0.05 | 0.95 |
+
+Interpretation: once the market enters a sustainable momentum regime, it tends to stay there (91% persistence). Non-sustainable regimes are even stickier (95%) — most momentum signals do not persist. The model flags regime shifts early, giving Kairos a signal to reduce exposure when the sustainable probability drops below 50%.
+
 ---
 
 ## §25 — Verification Scenarios (Additions)
@@ -1589,6 +1647,18 @@ During bootstrap (first 30 closed trades or +5% equity, whichever comes first):
 - **exit_condition**: WARNING only. Default to "time_stop" if missing. After bootstrap: VETO.
 - **holding_horizon_days**: Default to 5 if missing during bootstrap. After bootstrap: VETO.
 
+**Current bootstrap params (Kairos, as of Jul 9, commit 313f879):**
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Confidence threshold | 0.15 | Low bar ensures trades flow during data collection |
+| Position size | 5% of equity | Larger than default (1-2%) to generate meaningful signal |
+| Stop loss | 5% | Standard; no need to widen during bootstrap |
+| Ticker universe | 20 | Broad enough for opportunity, small enough for context |
+| Shorts allowed | Yes | Generates data in both directions |
+| Risk gate behavior | WARN (not VETO) | First 30 trades: warn on format issues, proceed anyway |
+| PG reader | Migrated to direct PG reads | Commit 313f879 — fully switched from SQLite bottleneck |
+
 This prevents the death spiral where: traders are too conservative → don't trade → when they finally try, risk veto rejects → still no trades → still no data → traders stay conservative. The bootstrap gate breaks this cycle by letting noisy trades through. Format correctness is valuable but secondary to having data to optimize against.
 
 ### 30.5 After-Hours Format Validation
@@ -1603,3 +1673,80 @@ Before every market open, each trader's prompt + HEARTBEAT must be tested throug
 **Schedule:** 8:00 AM ET, Mon-Fri. If any trader fails, block market open — fix the prompt first. A day with broken prompts is a day with zero data.
 
 **Script:** `validate_prompt_format.py` in Hermes cron scripts. Model used: the same model each trader runs (kairos: flash, aldridge: pro, stonks: flash).
+
+---
+
+## §31 — Task Tracking System
+
+### 31.1 Global Filesystem Task Tracker
+
+Tasks are tracked via `~/.tasks/` — a flat filesystem structure shared across all agents:
+
+```
+~/.tasks/
+  ready/          ← Tasks waiting to be assigned
+  running/        ← Tasks currently being worked (moved from ready/ by worker)
+  done/           ← Completed tasks (moved from running/ by worker with summary)
+  blocked/        ← Tasks that cannot proceed (requires external resolution)
+  backlog/        ← Tasks without current priority (reference only)
+```
+
+### 31.2 Orchestrator-Driven Assignment
+
+**Ash** (the orchestrator agent) manages the task pipeline:
+
+1. Places task files into `~/.tasks/ready/`
+2. Workers (Casper, Hermes, Coder, Researcher) claim tasks by moving them to `running/`
+3. On completion, workers move tasks to `done/` with a verification note
+4. Ash monitors `blocked/` weekly for unblock opportunities
+
+### 31.3 Task File Format
+
+Each task is a markdown file with structured frontmatter:
+
+```markdown
+---
+title: "Integrate HMM model into trading pipeline"
+priority: P1
+tags: [ml, model-deployment, kairos]
+created: 2026-07-09
+---
+
+## Steps
+1. Load `state/momentum_regime_model.pkl` in signal engine initialization
+2. Add `regime_prob_sustainable` to signal report fields
+3. Wire into Kairos's conviction calculation: position size *= regime_prob
+
+## Verification
+- [ ] Signal report includes `regime_prob_sustainable` field
+- [ ] Kairos position sizes scale with regime probability
+- [ ] Model reloads on tick without crashing
+```
+
+### 31.4 Shared Tracking via GitHub Issues
+
+System-level cross-agent tasks are mirrored to **GitHub Issues** on `Tesselation-Studios/paper-trading-teams` for visibility and audit. Each `~/.tasks/` file links to its corresponding GitHub issue and vice versa.
+
+---
+
+## §32 — Hermes Architecture Plan Integration
+
+### 32.1 Reference
+
+Hermes maintains a full architecture plan on the shared canvas (card `94914ac5`). This SPEC is the canonical system document; the Hermes architecture plan provides operational context, deployment sequencing, and cross-system dependencies.
+
+### 32.2 Key Additions from Hermes Plan
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| **trading-agent-prompts repo** | Dedicated repo for versioned trading prompts, separate from agent system monorepo | Planned |
+| **Git branching per variant** | Each prompt variant gets its own branch; winners merge to `main` | Active (see §13.1) |
+| **Multi-timeframe evaluation** | Evaluate prompts on 5-min, 1-hour, and daily bars simultaneously | Planned |
+| **Virtual trader competition pipeline** | All prompt variants compete in a head-to-head tournament on historical data; top 10% advance | Planned |
+
+### 32.3 Integration Points
+
+- The `trading-agent-prompts` repo will be consumed by the nightly sweep pipeline (§13) as the source of prompt variants
+- Multi-timeframe evaluation will be added as an optional mode in the replay harness (§21.5) — daily-only remains the default
+- The virtual trader competition will run weekly on Docker workers (.179), producing a leaderboard of variant performance
+- Winning variants from the tournament are automatically promoted to `experiment/*` branches for shadow-mode A/B testing (§11)
