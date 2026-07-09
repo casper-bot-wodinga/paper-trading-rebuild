@@ -33,16 +33,18 @@ log = logging.getLogger("llm_engine")
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def _load_api_key() -> str:
-    """Load OpenRouter API key from env or .env file."""
+    """Load OpenRouter API key from env or .env files."""
     key = os.environ.get("OPENROUTER_API_KEY", "")
     if key:
         return key
-    env_path = Path.home() / ".hermes" / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            if line.startswith("OPENROUTER_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    raise RuntimeError("OPENROUTER_API_KEY not found in env or ~/.hermes/.env")
+    # Try multiple .env locations (Hermes on Mac, Casper on VM)
+    for env_dir in [".hermes", ".openclaw", ""]:
+        env_path = Path.home() / env_dir / ".env" if env_dir else Path.home() / ".env"
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("OPENROUTER_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    raise RuntimeError("OPENROUTER_API_KEY not found in env or ~/.openclaw/.env, ~/.hermes/.env, ~/.env")
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────

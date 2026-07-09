@@ -45,23 +45,19 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
     # Core trading
     {
         "sqlite": "trades",
-        "pg": "trading.executed_trades",
+        "pg": "trading.trades",
         "map": {
-            "agent_id": "agent_id",
+            "trader_id": "agent_id",
+            "trade_id": "id",
             "ticker": "ticker",
-            "action": "action",
-            "quantity": "quantity",
-            "entry_price": "entry_price",
-            "exit_price": "exit_price",
             "entry_time": "entry_timestamp",
             "exit_time": "exit_timestamp",
-            "exit_reason": "exit_reason",
+            "entry_price": "entry_price",
+            "exit_price": "exit_price",
+            "shares": "quantity",
             "pnl": "pnl",
-            "pnl_pct": "pnl_pct",
-            "status": "status",
-            "decision_id": "decision_id",
-            "entry_reason": "entry_reason",
-            "stop_loss": "stop_loss",
+            "return_pct": "pnl_pct",
+            "buy_decision_id": "decision_id",
         },
         "on_conflict": "DO NOTHING",
     },
@@ -76,6 +72,39 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
             "conviction": "confidence",
             "rationale": "thesis",
         },
+        "defaults": {
+            "ticker": "",
+            "conviction": 0,
+        },
+        "on_conflict": "DO NOTHING",
+    },
+    {
+        "sqlite": "decisions",
+        "pg": "trading.trader_decisions",
+        "map": {
+            "agent_id": "agent_id",
+            "timestamp": "timestamp",
+            "action": "action",
+            "ticker": "ticker",
+            "quantity": "quantity",
+            "confidence": "confidence",
+            "thesis": "thesis",
+            "mood": "mood",
+            "source": "source",
+        },
+        "on_conflict": "DO NOTHING",
+    },
+    {
+        "sqlite": "journal",
+        "pg": "trading.trader_journal",
+        "map": {
+            "agent_id": "agent_id",
+            "timestamp": "timestamp",
+            "mood": "mood",
+            "entry": "entry",
+            "confidence": "confidence",
+            "source": "source",
+        },
         "on_conflict": "DO NOTHING",
     },
     {
@@ -84,8 +113,17 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
         "map": {
             "trader_id": "agent_id",
             "timestamp": "timestamp",
+            "ticker": "__default__",  # not in SQLite, use default
             "decision": "mood",
             "rationale": "entry",
+            "equity": "__default__",
+            "drawdown_pct": "__default__",
+        },
+        "defaults": {
+            "ticker": "",
+            "decision": "",
+            "equity": 100000,
+            "drawdown_pct": 0,
         },
         "on_conflict": "DO NOTHING",
     },
@@ -95,11 +133,17 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
         "pg": "trading.agent_state",
         "map": {
             "agent_id": "agent_id",
-            "equity": "current_portfolio_value",
-            "pnl": "unrealized_pnl",
+            "name": "name",
+            "current_portfolio_value": "current_portfolio_value",
+            "unrealized_pnl": "unrealized_pnl",
+            "ytd_pnl": "ytd_pnl",
+            "win_rate": "win_rate",
+            "wins": "wins",
+            "losses": "losses",
+            "total_trades": "total_trades",
             "updated_at": "updated_at",
         },
-        "on_conflict": "(agent_id) DO UPDATE SET equity=EXCLUDED.equity, pnl=EXCLUDED.pnl, updated_at=EXCLUDED.updated_at",
+        "on_conflict": "(agent_id) DO UPDATE SET current_portfolio_value=EXCLUDED.current_portfolio_value, unrealized_pnl=EXCLUDED.unrealized_pnl, updated_at=EXCLUDED.updated_at",
     },
     {
         "sqlite": "agent_profile",
@@ -111,22 +155,67 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
             "tagline": "tagline",
             "identity": "identity",
             "current_state": "current_state",
+            "performance": "performance",
+            "strategic_focus": "strategic_focus",
             "updated_at": "updated_at",
         },
         "on_conflict": "(agent_id) DO UPDATE SET name=EXCLUDED.name, current_state=EXCLUDED.current_state, updated_at=EXCLUDED.updated_at",
     },
     {
         "sqlite": "positions",
-        "pg": "trading.positions",
+        "pg": "trading.trader_positions",
         "map": {
             "agent_id": "agent_id",
             "ticker": "ticker",
             "quantity": "quantity",
-            "entry_price": "avg_entry_price",
+            "avg_entry_price": "avg_entry_price",
             "current_price": "current_price",
             "market_value": "market_value",
             "unrealized_pl": "unrealized_pl",
+            "stop_loss": "stop_loss",
+            "status": "status",
             "opened_at": "opened_at",
+            "closed_at": "closed_at",
+            "exit_condition": "exit_condition",
+        },
+        "on_conflict": "DO NOTHING",
+    },
+    {
+        "sqlite": "positions",
+        "pg": "trading.trader_positions",
+        "map": {  # duplicate to catch both positions tables
+            "agent_id": "agent_id",
+            "ticker": "ticker",
+            "quantity": "quantity",
+            "avg_entry_price": "avg_entry_price",
+            "current_price": "current_price",
+            "market_value": "market_value",
+            "unrealized_pl": "unrealized_pl",
+            "stop_loss": "stop_loss",
+            "status": "status",
+            "opened_at": "opened_at",
+            "closed_at": "closed_at",
+            "exit_condition": "exit_condition",
+        },
+        "on_conflict": "DO NOTHING",
+    },
+    {
+        "sqlite": "trader_positions",
+        "pg": "trading.trader_positions",
+        "map": {
+            "agent_id": "agent_id",
+            "trader_id": "trader_id",
+            "ticker": "ticker",
+            "quantity": "quantity",
+            "avg_entry_price": "avg_entry_price",
+            "current_price": "current_price",
+            "market_value": "market_value",
+            "unrealized_pl": "unrealized_pl",
+            "stop_loss": "stop_loss",
+            "status": "status",
+            "opened_at": "opened_at",
+            "closed_at": "closed_at",
+            "exit_condition": "exit_condition",
         },
         "on_conflict": "DO NOTHING",
     },
@@ -135,12 +224,48 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
         "pg": "trading.portfolio_snapshots",
         "map": {
             "agent_id": "agent_id",
+            "trader_id": "agent_id",
             "timestamp": "timestamp",
-            "equity": "portfolio_value",
+            "portfolio_value": "portfolio_value",
             "cash": "cash",
-            "pnl": "unrealized_pl",
+            "unrealized_pl": "unrealized_pl",
+            "daily_pnl": "daily_pnl",
+            "open_positions": "open_positions",
+            "source": "source",
         },
         "on_conflict": "DO NOTHING",
+    },
+    {
+        "sqlite": "orders",
+        "pg": "trading.orders",
+        "map": {
+            "decision_id": "decision_id",
+            "agent_id": "agent_id",
+            "timestamp": "timestamp",
+            "order_id": "order_id",
+            "action": "action",
+            "ticker": "ticker",
+            "quantity": "quantity",
+            "stop_loss": "stop_loss",
+            "status": "status",
+            "filled_price": "filled_price",
+            "error_reason": "error_reason",
+            "stop_loss_submitted": "stop_loss_submitted",
+        },
+        "on_conflict": "(order_id) DO UPDATE SET status=EXCLUDED.status, filled_price=EXCLUDED.filled_price",
+    },
+    {
+        "sqlite": "trader_watchlist",
+        "pg": "trading.trader_watchlist",
+        "map": {
+            "agent_id": "agent_id",
+            "ticker": "ticker",
+            "reason": "reason",
+            "conviction_level": "conviction_level",
+            "added_at": "added_at",
+            "trader_id": "trader_id",
+        },
+        "on_conflict": "(agent_id, ticker) DO UPDATE SET reason=EXCLUDED.reason, conviction_level=EXCLUDED.conviction_level",
     },
     {
         "sqlite": "daily_pnl",
@@ -198,8 +323,11 @@ MIGRATION_TABLES: list[dict[str, Any]] = [
 ]
 
 
-def _sanitize_value(val: Any) -> Any:
-    """Strip NUL bytes from string values (Postgres rejects them)."""
+def _sanitize_value(val: Any, col_default: Any = None) -> Any:
+    """Strip NUL bytes from string values (Postgres rejects them).
+    Also replaces None with a column-specific default if provided."""
+    if val is None and col_default is not None:
+        return col_default
     if isinstance(val, str):
         return val.replace("\x00", "")
     return val
@@ -236,10 +364,14 @@ def migrate_table(
     sq_cols = [d[1] for d in sq_conn.execute(f"PRAGMA table_info({sq_table})")]
 
     # Build PG column list and value list
+    # sq_col == '__default__' means always use the default value (synthetic column)
     pg_cols = []
-    sq_indices = []
+    sq_indices = []  # index in SQLite row, or -1 for synthetic __default__ columns
     for pg_col, sq_col in col_map.items():
-        if sq_col in sq_cols:
+        if sq_col == '__default__':
+            pg_cols.append(pg_col)
+            sq_indices.append(-1)  # synthetic: use default
+        elif sq_col in sq_cols:
             pg_cols.append(pg_col)
             sq_indices.append(sq_cols.index(sq_col))
 
@@ -247,10 +379,20 @@ def migrate_table(
         print(f"  [SKIP] {sq_table} → no matching columns")
         return 0
 
-    # Extract values (sanitize NULL bytes)
+    # Extract values with defaults for NOT NULL columns
+    defaults = table_def.get("defaults", {})
     values = []
     for row in sq_rows:
-        values.append(tuple(_sanitize_value(row[i]) for i in sq_indices))
+        row_vals = []
+        for idx, pg_col in zip(sq_indices, pg_cols):
+            if idx == -1:
+                # Synthetic column: use default value
+                val = defaults.get(pg_col)
+            else:
+                val = row[idx]
+            col_default = defaults.get(pg_col)
+            row_vals.append(_sanitize_value(val, col_default))
+        values.append(tuple(row_vals))
 
     col_str = ", ".join(pg_cols)
 

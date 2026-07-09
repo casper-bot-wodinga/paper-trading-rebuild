@@ -6,45 +6,111 @@ Output: JSON blob with positions, P&L, watchlist quotes, regime, and params.
 
 This script is called as the first line of every trading tick cron.
 Its output is prepended to the strategy prompt.
+
+Reads from Postgres (primary) with SQLite fallback.
 """
 
 import argparse
 import json
-import sqlite3
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "shared" / "trader.db"
 PARAMS_DIR = Path(__file__).resolve().parent.parent / "state"
+
+# Postgres connection (same as paper-trading-teams/src/db.py)
+PG_HOST = os.getenv("PGHOST", "docker.klo")
+PG_PORT = os.getenv("PGPORT", "5433")
+PG_DB = os.getenv("PGDATABASE", "trading")
+PG_USER = os.getenv("PGUSER", "trader")
+PG_PASSWORD = os.getenv("PGPASSWORD", "trade123")
+PG_URL = os.getenv(
+    "DATABASE_URL",
+    f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DB}",
+)
+
+# SQLite fallback path
+SQLITE_PATH = Path("/home/openclaw/projects/paper-trading-teams/shared/trader.db")
+
+
+def _get_pg_conn():
+    """Lazy Postgres connection."""
+    import psycopg2
+    conn = psycopg2.connect(PG_URL)
+    conn.autocommit = True
+    return conn
+
+
+def _get_sl_conn():
+    """Read-only SQLite connection for fallback."""
+    import sqlite3
+    conn = sqlite3.connect(f"file:{SQLITE_PATH}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def get_positions(agent_id: str) -> list[dict]:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """SELECT ticker, quantity, avg_entry_price, current_price, unrealized_pl
-           FROM positions
-           WHERE agent_id = ? AND status = 'open'
-           ORDER BY ticker""",
-        (agent_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    """Get open positions from Postgres (trader_positions), fallback to SQLite."""
+    try:
+        pg = _get_pg_conn()
+        cur = pg.cursor()
+        cur.execute(
+            """SELECT DISTINCT ON (ticker) ticker, quantity, avg_entry_price,
+                      current_price, unrealized_pl
+               FROM trading.trader_positions
+               WHERE agent_id = %s AND status = 'open'
+               ORDER BY ticker, id DESC""",
+            (agent_id,),
+        )
+        rows = cur.fetchall()
+        pg.close()
+        return [{"ticker": r[0], "quantity": r[1], "avg_entry_price": r[2],
+                 "current_price": r[3], "unrealized_pl": r[4]} for r in rows]
+    except Exception as e:
+        print(f"[tick_prep] PG positions query failed: {e}, falling back to SQLite", file=sys.stderr)
+        conn = _get_sl_conn()
+        rows = conn.execute(
+            """SELECT ticker, quantity, avg_entry_price, current_price, unrealized_pl
+               FROM trader_positions
+               WHERE agent_id = ? AND status = 'open'
+               ORDER BY ticker""",
+            (agent_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
 
 def get_last_decision(agent_id: str) -> dict | None:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        """SELECT timestamp, action, ticker, quantity
-           FROM decisions
-           WHERE agent_id = ?
-           ORDER BY id DESC LIMIT 1""",
-        (agent_id,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    """Get last decision from Postgres (trader_decisions), fallback to SQLite."""
+    try:
+        pg = _get_pg_conn()
+        cur = pg.cursor()
+        cur.execute(
+            """SELECT timestamp, action, ticker, quantity
+               FROM trading.trader_decisions
+               WHERE agent_id = %s
+               ORDER BY id DESC LIMIT 1""",
+            (agent_id,),
+        )
+        row = cur.fetchone()
+        pg.close()
+        if row:
+            return {"timestamp": str(row[0]), "action": row[1],
+                    "ticker": row[2], "quantity": row[3]}
+        return None
+    except Exception as e:
+        print(f"[tick_prep] PG decisions query failed: {e}, falling back to SQLite", file=sys.stderr)
+        conn = _get_sl_conn()
+        row = conn.execute(
+            """SELECT timestamp, action, ticker, quantity
+               FROM trader_decisions
+               WHERE agent_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (agent_id,),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
 
 
 def get_params(agent_id: str) -> dict:

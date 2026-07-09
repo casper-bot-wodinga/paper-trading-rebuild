@@ -342,11 +342,60 @@ class VirtualPortfolio:
 # Global portfolio registry (keyed by trader_name)
 _portfolios: Dict[str, VirtualPortfolio] = {}
 
+# Live equity cache — refreshed each cycle so new virtuals start at real equity
+_live_equities: Dict[str, float] = {}
 
-def get_portfolio(trader_name: str) -> VirtualPortfolio:
-    """Get or create a virtual portfolio for a trader."""
+# Alpaca key mapping — mirrors the live trader accounts
+_ALPACA_KEYS = {
+    "kairos":   ("KAIROS_API_KEY",   "KAIROS_SECRET_KEY"),
+    "aldridge": ("ALDRIDGE_API_KEY", "ALDRIDGE_SECRET_KEY"),
+    "stonks":   ("STONKS_API_KEY",   "STONKS_SECRET_KEY"),
+}
+
+
+def _fetch_live_equity(base_trader: str) -> float:
+    """Fetch current paper account equity from Alpaca for a base trader.
+
+    Falls back to config starting_cash if Alpaca is unreachable.
+    """
+    try:
+        from dotenv import load_dotenv
+        from alpaca.trading.client import TradingClient
+
+        load_dotenv(Path.home() / ".openclaw" / ".env", override=True)
+        key_env, secret_env = _ALPACA_KEYS.get(base_trader, (None, None))
+        if not key_env:
+            raise ValueError(f"No Alpaca keys for base trader: {base_trader}")
+
+        client = TradingClient(os.getenv(key_env), os.getenv(secret_env), paper=True)
+        account = client.get_account()
+        return float(account.equity)
+    except Exception as e:
+        log.warning("Could not fetch live equity for %s: %s — using default $%s",
+                      base_trader, e, _config["starting_cash"])
+        return _config["starting_cash"]
+
+
+def refresh_live_equities():
+    """Refresh live equity cache for all base traders."""
+    global _live_equities
+    for base in _ALPACA_KEYS:
+        _live_equities[base] = _fetch_live_equity(base)
+    log.info("Live equities: %s", {k: f"${v:,.2f}" for k, v in _live_equities.items()})
+
+
+def get_portfolio(trader_name: str, base_trader: str = None, is_live: bool = False) -> VirtualPortfolio:
+    """Get or create a virtual portfolio for a trader.
+
+    For virtual traders, starting cash = their base trader's current Alpaca equity.
+    For live baselines, use the Alpaca equity directly.
+    New portfolios always inherit the latest live equity (not fixed $10K).
+    """
     if trader_name not in _portfolios:
-        _portfolios[trader_name] = VirtualPortfolio()
+        cash = _config["starting_cash"]
+        if base_trader and base_trader in _live_equities:
+            cash = _live_equities[base_trader]
+        _portfolios[trader_name] = VirtualPortfolio(cash=cash)
     return _portfolios[trader_name]
 
 
@@ -457,8 +506,9 @@ def run_one_trader(
         return None
 
     try:
-        # Get portfolio state for this trader
-        virtual_portfolio = get_portfolio(trader_name)
+        # Get portfolio state for this trader — inherit live equity for virtuals
+        virtual_portfolio = get_portfolio(trader_name, base_trader=base_trader,
+                                          is_live=(trade_source == "live"))
         portfolio = virtual_portfolio.to_llm_portfolio()
 
         # Call LLM
@@ -550,7 +600,10 @@ def run_once(
     log.info("Fetched %d quotes (+ %d signal sets) → %d ticks",
              len(quotes), len(momentum_signals), len(ticks))
 
-    # 2. Load virtual traders
+    # 2. Refresh live equity cache — virtuals inherit parent trader's balance
+    refresh_live_equities()
+
+    # 3. Load virtual traders
     virtuals = load_virtual_traders(names=virtual_names)
     if virtual_names:
         found = {v["name"] for v in virtuals}
