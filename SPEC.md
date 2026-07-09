@@ -1678,54 +1678,45 @@ Before every market open, each trader's prompt + HEARTBEAT must be tested throug
 
 ## §31 — Task Tracking System
 
-### 31.1 Global Filesystem Task Tracker
+### 31.1 Workboard Plugin (Canonical)
 
-Tasks are tracked via `~/.tasks/` — a flat filesystem structure shared across all agents:
+All tasks are tracked via OpenClaw's **Workboard plugin** — a SQLite-backed card system with status lifecycle, agent assignment, priority, dependency linking, diagnostics, and automated dispatch.
+
+### 31.2 Card Lifecycle
 
 ```
-~/.tasks/
-  ready/          ← Tasks waiting to be assigned
-  running/        ← Tasks currently being worked (moved from ready/ by worker)
-  done/           ← Completed tasks (moved from running/ by worker with summary)
-  blocked/        ← Tasks that cannot proceed (requires external resolution)
-  backlog/        ← Tasks without current priority (reference only)
+backlog → todo → ready → running → review → done
+                               ↓
+                            blocked
 ```
 
-### 31.2 Orchestrator-Driven Assignment
+| Status | Meaning |
+|--------|---------|
+| `backlog` | Ideas / nice-to-haves / long-term — no active intent |
+| `todo` | Specified and prioritized, ready to be claimed |
+| `ready` | All dependencies met, dispatch-eligible |
+| `running` | Claimed by an agent session, actively being worked |
+| `review` | Work submitted, awaiting human sign-off |
+| `done` | Completed with summary, proof, and artifacts |
+| `blocked` | Cannot proceed — external dependency or unresolved issue |
 
-**Ash** (the orchestrator agent) manages the task pipeline:
+### 31.3 Automated Dispatch
 
-1. Places task files into `~/.tasks/ready/`
-2. Workers (Casper, Hermes, Coder, Researcher) claim tasks by moving them to `running/`
-3. On completion, workers move tasks to `done/` with a verification note
-4. Ash monitors `blocked/` weekly for unblock opportunities
+- **Orchestrator heartbeat** (every 30 min) runs a gardener pass: promotes unblocked `todo` → `ready`, reclaims stale claims, blocks timed-out runs, and surfaces stranded cards via diagnostics
+- **Dispatcher** (on-demand, e.g. `workboard_dispatch`) promotes `ready` cards to `running` when an agent slot is free
+- **Agents** claim cards via `workboard_claim` with a configurable TTL, refresh with `workboard_heartbeat`, and complete via `workboard_complete` with proof/artifacts
 
-### 31.3 Task File Format
+### 31.4 Key Features
 
-Each task is a markdown file with structured frontmatter:
+- **Dependency linking**: cards can be blocked on parent cards; children auto-promote when parents complete
+- **Diagnostics**: stranded-ready detection, stale claims, failure tracking per attempt
+- **Worker logs**: per-card execution history with session keys and run IDs
+- **Attachments**: small binary/text artifacts stored in plugin KV store
+- **Proof system**: test results, screenshots, commit hashes attached per card
 
-```markdown
----
-title: "Integrate HMM model into trading pipeline"
-priority: P1
-tags: [ml, model-deployment, kairos]
-created: 2026-07-09
----
+### 31.5 GitHub Issues (Optional Mirror)
 
-## Steps
-1. Load `state/momentum_regime_model.pkl` in signal engine initialization
-2. Add `regime_prob_sustainable` to signal report fields
-3. Wire into Kairos's conviction calculation: position size *= regime_prob
-
-## Verification
-- [ ] Signal report includes `regime_prob_sustainable` field
-- [ ] Kairos position sizes scale with regime probability
-- [ ] Model reloads on tick without crashing
-```
-
-### 31.4 Shared Tracking via GitHub Issues
-
-System-level cross-agent tasks are mirrored to **GitHub Issues** on `Tesselation-Studios/paper-trading-teams` for visibility and audit. Each `~/.tasks/` file links to its corresponding GitHub issue and vice versa.
+Major milestones or cross-system tasks are mirrored to GitHub Issues on `Tesselation-Studios/paper-trading-teams` for external visibility. The workboard is the source of truth."}
 
 ---
 
