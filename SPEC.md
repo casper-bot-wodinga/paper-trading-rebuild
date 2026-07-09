@@ -32,7 +32,7 @@ MARKET DATA (Alpaca → Data Bus)
 │ • Vol filters     │     │   context         │
 │ • Position sizing │     │ Makes BUY/SELL/   │
 │ • Regime weights  │     │   HOLD decision   │
-│ • Conviction       │     │ Writes decision   │
+│ • Conviction       │     │   Writes decision │
 │   calibration     │     │   journal         │
 │                   │     │ CAN override      │
 │        ↑          │     │   signals         │
