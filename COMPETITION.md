@@ -1,7 +1,7 @@
 # COMPETITION: Paper Trading Tournament Rules & Virtual Trader Pipeline
 
 > **Companion spec to** `SPEC.md`
-> **Repos:** `Tesselation-Studios/paper-trading-rebuild`, `Tesselation-Studios/paper-trading-agents`, `Tesselation-Studios/paper-trading-prompts`
+> **Repos:** `Tesselation-Studios/paper-trading-rebuild`, `Tesselation-Studios/paper-trading-agents`, `Tesselation-Studios/paper-trading-agents`
 > **Status:** Active — all three traders live, competition started Jul 9, 2026
 > **Goal:** Maximize portfolio value by December 31, 2026. Winner takes all (bragging rights).
 > **Last updated:** 2026-07-09
@@ -155,7 +155,7 @@ A virtual variant becomes a real trader update when:
    - Other virtual variants with the same evaluation window
    - Baseline (previous best params)
 4. **If improvement > threshold** (e.g., 5% better than baseline):
-   - Create PR to `paper-trading-prompts` repo
+   - Create PR to `paper-trading-agents` repo
    - Merge to main → deployed to real OpenClaw agent
 5. **If no improvement:** log "no improvement found" with window context
 6. **If performance degraded:** log "regression detected" — do not promote
@@ -165,7 +165,7 @@ Never kill a variant early unless it hits a hard drawdown limit (>15%).
 
 ### C2.6 Git Branching Strategy
 
-Each virtual trader operates on its own git branch in `paper-trading-prompts`:
+Each virtual trader operates on its own git branch in `paper-trading-agents`:
 
 ```
 main                    — Current production prompts for real traders
@@ -396,7 +396,7 @@ Tracked in GitHub Issues #80-#88 on `Tesselation-Studios/paper-trading-rebuild`.
   Dockerfile + compose exist but need verification that the data bus actually works
   as a container. Current Dockerfile wraps `pg_dashboard.py`, not `data_bus.py`.
 
-- [ ] **#81 — Migrate trader files to `paper-trading-prompts` repo**
+- [ ] **#81 — Migrate trader files to `paper-trading-agents` repo**
   Sync the ACTUAL workspaces from OpenClaw (.41) into the prompts repo.
   Current files in the agents repo are stale (Jul 6-7). The fresh versions
   (Aldridge reflection, Kairos refocus) need to be committed.
