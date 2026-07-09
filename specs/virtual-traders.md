@@ -1,5 +1,8 @@
 # Virtual Traders — Simple Spec
 
+**Parent**: [SPEC.md](../SPEC.md)
+**Updated**: 2026-07-09
+
 Each live trader gets 5-10 shadows. Each shadow is one param change or prompt variant. They trade on paper during market hours, log everything. Weekly: keep the top 3, replace the bottom 3 with new variants.
 
 ---
