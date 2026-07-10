@@ -215,6 +215,6 @@ Nightly synthesis is appended into AGENTS.md (~80 lines/night). Current files ar
 
 ### Action Items from Fusion Router
 
-See `FR-1` through `FR-18` in [review-fusion-router-rebuild.md](todo: path once committed). Prioritized as P0-P4. The `.tasks/` queue in `~/.tasks/ready/` drives execution via the orchestrator heartbeat.
+See `FR-1` through `FR-18` in the fusion router review at `~/.tasks/review-fusion-router-rebuild.md`. Prioritized as P0-P4. The `.tasks/` queue in `~/.tasks/ready/` drives execution via the orchestrator heartbeat.
 
 **Next milestone:** Migrate tick architecture from tool-based to pre-assembled prompt (FR-2, FR-3). Unblocks FR-4 (schema unification) and all downstream work.
