@@ -548,15 +548,17 @@ def run_one_trader(
         }
 
         log.info(
-            "  %-24s %s:%-6s conv=%.2f signal=%+.2f regime=%s source=%s",
+            "  %-24s %s:%-6s conv=%s signal=%s regime=%s source=%s",
             trader_name, result["ticker"], result["decision"],
-            result["conviction"], result["composite_signal"],
-            result["regime"], result["source"],
+            f"{result['conviction']:.2f}" if result["conviction"] is not None else "N/A",
+            f"{result['composite_signal']:+.2f}" if result["composite_signal"] is not None else "N/A",
+            result["regime"] or "N/A",
+            result["source"],
         )
         return result
 
     except Exception as e:
-        log.error("  %-24s ERROR: %s", trader_name, e)
+        log.error("  %-24s ERROR: %s", trader_name, e, exc_info=True)
         return None
 
 
@@ -710,10 +712,13 @@ def print_result_table(results: List[Dict[str, Any]]):
           f"{'Conv':<6} {'Signal':<8} {'Regime'}")
     print("-" * 95)
     for r in sorted(results, key=lambda r: (r["source"], r["trader"])):
+        conv = f"{r['conviction']:<5.2f}" if r['conviction'] is not None else "N/A  "
+        sig  = f"{r['composite_signal']:+6.2f}" if r['composite_signal'] is not None else "   N/A"
+        reg  = r['regime'] if r['regime'] else "N/A"
         print(
             f"{r['trader']:<26} {r['source']:<8} {r['ticker']:<7} "
-            f"{r['decision']:<8} {r['conviction']:<5.2f}  "
-            f"{r['composite_signal']:+6.2f}   {r['regime']}"
+            f"{r['decision']:<8} {conv}  "
+            f"{sig}   {reg}"
         )
 
 
