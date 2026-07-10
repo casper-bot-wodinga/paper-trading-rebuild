@@ -1,8 +1,8 @@
-# Spec: Nightly Optimization Pipeline — Multi-Date Backtesting & Data Pipeline
+# Nightly Optimization Pipeline
 
-**Project**: [SPEC.md](../SPEC.md)
+**Parent**: [SPEC.md](../SPEC.md)
 **Created**: 2026-07-06
-**Parents**: SPEC.md, [data-fetcher.md](data-fetcher.md)
+**Updated**: 2026-07-09
 **Children**: None yet
 **Motivation**: Prompt sweep currently tests on a single day (N=1, massive overfitting risk). We need 10-20 trading days of historical data with walk-forward validation to trust a winner.
 

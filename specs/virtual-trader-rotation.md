@@ -1,6 +1,7 @@
-# SPEC: Virtual Trader Rotation System
+# Virtual Trader Rotation System
 
-> **Status:** Planning | **Agent:** Hermes 🪽 | **Date:** 2026-07-07
+**Parent**: [SPEC.md](../SPEC.md)
+**Updated**: 2026-07-09
 
 ---
 

@@ -1,10 +1,8 @@
 # Spec: K-Means Regime Detection — Hidden Market States
 
-**Project**: [SPEC.md](../SPEC.md)
+**Parent**: [SPEC.md](../SPEC.md)
 **Created**: 2026-07-06
-**Status**: Design Phase
-**Replaces**: `src/signals.py:_classify_regime()` (rule-based classifier)
-**Parents**: SPEC.md §3 (Signal Engine)
+**Status**: Active
 
 ---
 
