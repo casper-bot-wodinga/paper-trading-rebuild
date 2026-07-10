@@ -167,3 +167,54 @@ python3 scripts/night_pipeline_v2.py
 # Create issue
 gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." --label "bug"
 ```
+
+---
+
+## Current State Assessment (2026-07-10)
+
+> This section tracks drift between the SPEC's aspirational architecture and the live running system. Updated by Fusion Router review on 2026-07-10.
+
+### 🔴 Critical Drift
+
+| SPEC Claim | Live State | Impact |
+|---|---|---|
+| "LLM never touches a tool during a trading tick" — pre-assembled prompt | AGENTS.md lists 4+ tool calls per tick (`curl`, `python3 skill_*.py`, etc.) | 2-7 min per tick wasted on tool execution; P99 timeout risk |
+| Drawdown >15% → knockout, score=0 | Aldridge at 75% max DD, still trading | Circuit breaker not implemented — knocked-out trader still positions |
+| `prompts/{trader}.txt` is prompt source | `~/projects/trading-agent-prompts/{trader}/AGENTS.md` is source | Path mismatch; prompts live outside the repo |
+| JSON schema: `decision`/`conviction`/`rationale` | Live uses `action`/`confidence`/`reasoning` | Incompatible parsers; downstream tools read wrong fields |
+
+### 🟡 Significant Drift
+
+| SPEC Claim | Live State | Impact |
+|---|---|---|
+| XGBoost accuracy 78% | Kairos prompt says 63% | Stale model or stale prompt — can't tell which |
+| K-Means regime with 10 features | Rule-based `TRENDING_UP/DOWN/HIGH_VOL/MEAN_REVERTING` | K-means not deployed; old classifier still running |
+| Multi-date walk-forward sweep | Single-date sweep with synthetic data fallback | Prompt overfitting; synthetic data is noise |
+| Pre-market format validation blocks open | No evidence this gate is active | Broken prompts could hit production |
+
+### 🟢 Not Yet Deployed
+
+| Spec Subsystem | Status | Priority |
+|---|---|---|
+| Virtual traders (shadow + rotation) | Not deployed — tables don't exist | P2 |
+| K-Means regime detector (`regime_detector.py`) | Spec defined, not deployed | P3 |
+| BarLoader + backfill pipeline | Parquet data severely lopsided (61K rows on one day, 2 on others) | P1 |
+| CostModel in replay | Not implemented | P2 |
+
+### Live System Health
+
+| Trader | P&L | Win Rate | Max DD | Status |
+|--------|-----|----------|--------|--------|
+| **Kairos** | -$65 to -$83 | 0-16.7% | 14.7% | 🟡 0.3% from knockout |
+| **Aldridge** | — | 50% | **75%** | 🔴 Should be knocked out |
+| **Stonks** | $0 | 0% | 13.2% | 🔴 Not trading at all |
+
+### ⚠️ Active Risk: Prompt Bloat
+
+Nightly synthesis is appended into AGENTS.md (~80 lines/night). Current files are ~10K chars — approaching OpenClaw's 12K hard limit. Mid-file instructions will silently be truncated. Synthesis MUST be moved to a separate file or DB.
+
+### Action Items from Fusion Router
+
+See `FR-1` through `FR-18` in [review-fusion-router-rebuild.md](todo: path once committed). Prioritized as P0-P4. The `.tasks/` queue in `~/.tasks/ready/` drives execution via the orchestrator heartbeat.
+
+**Next milestone:** Migrate tick architecture from tool-based to pre-assembled prompt (FR-2, FR-3). Unblocks FR-4 (schema unification) and all downstream work.
