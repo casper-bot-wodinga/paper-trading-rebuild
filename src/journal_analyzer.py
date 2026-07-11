@@ -97,8 +97,8 @@ def detect_high_conviction_losses(
     # Find high-conviction losing trades
     losing_high_conv = []
     for i, trade in enumerate(trades):
-        pnl = trade.get("pnl", 0)
-        conv = trade.get("conviction", 0)
+        pnl = trade.get("pnl", 0) or 0
+        conv = trade.get("conviction", 0) or 0
         ticker = trade.get("ticker", "?")
 
         if pnl < 0 and conv >= conviction_threshold:
@@ -170,7 +170,7 @@ def compute_regime_stats(
 
     for trade in trades:
         regime = trade.get("regime", "unknown")
-        pnl = trade.get("pnl", 0.0)
+        pnl = trade.get("pnl", 0.0) or 0.0
         stats[regime]["count"] += 1
         stats[regime]["total_pnl"] += pnl
         if pnl > 0:

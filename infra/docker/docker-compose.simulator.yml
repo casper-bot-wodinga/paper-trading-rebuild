@@ -1,0 +1,96 @@
+# docker-compose.simulator.yml — Historical Trading Simulator Service
+# ==============================================================================
+# Adds the historical backtesting/simulation container to the paper-trading
+# stack. Runs offline (synthetic data) or connected to the trading database
+# for persisted sweep results.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f infra/docker/docker-compose.simulator.yml \
+#     up -d --build
+#
+# One-shot sweep:
+#   docker compose -f docker-compose.yml -f infra/docker/docker-compose.simulator.yml \
+#     run --rm simulator sweep --all --days 5
+#
+# Deep validation:
+#   docker compose -f docker-compose.yml -f infra/docker/docker-compose.simulator.yml \
+#     run --rm simulator deep --trader kairos --days 30
+#
+# Test with synthetic data (no DB required):
+#   docker compose -f docker-compose.yml -f infra/docker/docker-compose.simulator.yml \
+#     run --rm simulator test --trader kairos --ticks 10
+# ==============================================================================
+
+services:
+  # ── Historical Trading Simulator ─────────────────────────────────────────
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulator
+    container_name: trading-simulator
+    restart: "no"  # batch jobs — restart handled by orchestrator/cron
+    dns:
+      - 192.168.1.25
+    environment:
+      # ── Required ──────────────────────────────────────────────────
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+
+      # ── Database (optional — omit for offline/synthetic mode) ─────
+      - SIM_DB_DSN=host=trading-db port=5432 dbname=trading user=trader
+
+      # ── Simulator configuration ───────────────────────────────────
+      - SIM_MODEL=deepseek/deepseek-v4-flash
+      - SIM_LOG_LEVEL=INFO
+      - SIM_DEFAULT_CASH=100000
+      - SIM_MAX_PARALLEL=8
+      - SIM_RELAX_ITERATIONS=3
+
+    volumes:
+      # Persistent state (lock files, logs, run metadata)
+      - sim-state:/app/state
+      # Market data cache (optional — avoids re-downloading yfinance data)
+      - sim-market-data:/app/data/market
+
+    working_dir: /app
+
+    # Default command — override via docker compose run or CMD
+    command: sweep --all --days 5
+
+    # Wait for DB before running (if using DB mode)
+    depends_on:
+      trading-db:
+        condition: service_healthy
+        required: false  # optional — allow offline mode without DB
+
+    networks:
+      - default  # shares trading-net with main stack
+
+    # Health endpoint for orchestrator
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9100/health"]
+      interval: 120s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── (Optional) Cron-sidecar for scheduled sweeps ─────────────────────────
+  # Uncomment to add a cron-based scheduler that auto-runs simulator sweeps.
+  #
+  # sim-cron:
+  #   image: alpine:3.19
+  #   container_name: trading-sim-cron
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./infra/docker/sim-crontab:/etc/crontabs/root
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: >
+  #     sh -c "echo 'Installing cron...' &&
+  #            apk add --no-cache docker-cli &&
+  #            echo 'Cron configured — starting daemon' &&
+  #            crond -f -l 2"
+
+volumes:
+  sim-state:
+    driver: local
+  sim-market-data:
+    driver: local

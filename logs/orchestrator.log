@@ -1,0 +1,80 @@
+  File "<string>", line 17
+    'message': '🔄 **Orchestrator Tick** — work on this task:\n\n**File:** .tasks/P0-overnight-bug-hunt.md\n\n**Preview:**\n# Task: Overnight Bug Hunter
+               ^
+SyntaxError: unterminated string literal (detected at line 17)
+  File "<string>", line 17
+    'message': '🔄 **Orchestrator Tick** — work on this task:\n\n**File:** .tasks/P0-overnight-bug-hunt.md\n\n**Preview:**\n# Task: Overnight Bug Hunter
+               ^
+SyntaxError: unterminated string literal (detected at line 17)
+  File "<string>", line 17
+    'message': '🔄 **Orchestrator Tick** — work on this task:\n\n**File:** .tasks/P0-overnight-bug-hunt.md\n\n**Preview:**\n# Task: Overnight Bug Hunter
+               ^
+SyntaxError: unterminated string literal (detected at line 17)
+  File "<string>", line 17
+    'message': '🔄 **Orchestrator Tick** — work on this task:\n\n**File:** .tasks/P0-overnight-bug-hunt.md\n\n**Preview:**\n# Task: Overnight Bug Hunter
+               ^
+SyntaxError: unterminated string literal (detected at line 17)
+  File "<string>", line 19
+    'message': '🔄 **Orchestrator Tick** — work on this task:\n\n**File:** .tasks/P0-deploy-virtual-runner.md\n\n**Preview:**\n# P0: Deploy virtual_runner — get virtual traders executing every 5 min
+               ^
+SyntaxError: unterminated string literal (detected at line 19)
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory
+bash: /home/openclaw/projects/paper-trading-rebuild/.tasks/orchestrator-tick.sh: No such file or directory

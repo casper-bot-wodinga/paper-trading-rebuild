@@ -20,7 +20,18 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.observability import metrics
+try:
+    from src.observability import metrics
+except ImportError:
+    import contextlib
+    class _NullMetrics:
+        def increment(self, name, tags=None): pass
+        def observe(self, name, value, tags=None): pass
+        @contextlib.contextmanager
+        def timer(self, name, tags=None): yield
+        def histogram(self, name, value, tags=None): pass
+        def gauge(self, name, value, tags=None): pass
+    metrics = _NullMetrics()
 
 log = logging.getLogger("signals")
 

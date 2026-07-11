@@ -34,6 +34,19 @@ gates:
   max_correlated_bets: 3       # Max correlated positions (same sector/theme)
   vetos_before_force_hold: 3   # Consecutive vetos before forcing cash-only
 
+# ── Agent Tool-Loop Circuit Breakers ───────────────────────────────────────────
+# Prevents trading agents from getting stuck in runaway tool-call loops.
+# Each trader gets its own breaker instance. When tripped, the trader is
+# auto-paused in trading.risk_state for the configured cooldown.
+#
+# Reference: src/circuit_breaker.py — AgentCircuitBreaker class
+# 
+circuit_breaker:
+  max_tool_calls_per_tick: 20    # >20 tool calls in one tick → trip
+  max_repeat_tool_args: 3        # Same tool+args 3+ times in a tick → abort
+  tool_timeout_seconds: 60       # >60s in tool calls without a decision → hard stop
+  auto_pause_minutes: 5          # Trip → pause trader for 5 min
+
 # ── Volatility Filters ───────────────────────────────────────────────────────
 volatility:
   max_vix_threshold: 35        # Halt new entries when VIX > 35

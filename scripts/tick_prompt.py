@@ -102,7 +102,7 @@ def get_journal_entries(db_path: str, trader_id: str, n: int = 5) -> list[str]:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT entry as content, timestamp as created_at FROM trader_journal "
+            "SELECT entry as content, timestamp as created_at FROM journal "
             "WHERE agent_id = ? ORDER BY timestamp DESC LIMIT ?",
             (f"trader-{trader_id}", n),
         ).fetchall()
@@ -230,6 +230,10 @@ def check_circuit_breaker(trader_id: str) -> dict | None:
     """
     agent_id = f"trader-{trader_id}"
     try:
+        # Ensure repo root is on path for src imports
+        _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _repo_root not in sys.path:
+            sys.path.insert(0, _repo_root)
         from src.circuit_breaker import get_breaker
         breaker = get_breaker(agent_id)
         paused, reason = breaker.check_paused()
@@ -324,9 +328,18 @@ def assemble_prompt(trader_id: str, db_path: str | None = None) -> str:
 
 1. Read the market context and your watchlist quotes above.
 2. Read YOUR PROMPT for your strategy, persona, and rules.
-3. Make ONE trading decision: BUY, SELL, or HOLD.
-4. Use `python3 src/skill_alpaca.py --account {trader_id}` to execute.
-5. Journal your reasoning.
+3. Make ONE trading decision and output it as JSON:
+```json
+{{
+  "decision": "BUY|SELL|HOLD",
+  "ticker": "AAPL",
+  "conviction": 0.0-1.0,
+  "rationale": "your reasoning in 1-2 sentences",
+  "signal_override": false,
+  "override_reason": null
+}}
+```
+4. You have NO tools. All context is pre-assembled above. Output JSON only.
 
 REMEMBER: thesis MUST be 20+ chars, signals_used MUST have at least 1 entry,
 confidence ≥ 0.3. A HOLD with idle cash is a missed learning opportunity.
@@ -348,8 +361,8 @@ def main():
     )
     parser.add_argument(
         "--db-path",
-        default=os.path.join(os.path.dirname(__file__), "..", "..",
-                             "paper-trading-teams", "shared", "trader.db"),
+        default=os.path.join(os.path.dirname(__file__), "..",
+                             "shared", "trader.db"),
         help="Path to SQLite trader database (for journal entries)"
     )
     parser.add_argument(

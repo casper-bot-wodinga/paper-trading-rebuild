@@ -2,50 +2,40 @@
 
 This folder is home. Treat it that way.
 
-## Data Bus (primary source)
-All market data comes from the central Data Bus on localhost:5000:
-- Quotes: GET /quotes?symbols=SYM1,SYM2
-- News: GET /news?symbol=SYM (Alpaca news, 3min cache)
-  - **Structured Scoring (Phase 3D):** Use `python3 src/skill_news.py --score NVDA,AAPL,MSFT` for 
-    numeric sentiment scores (−1 to 1) with catalyst type detection.
-  - Integrate news_score into entry conviction: >0.3 positive → +20% boost; <-0.3 negative → override weak technicals
-- ML Signal: GET /ml-signal?symbol=SYM (HMM regime — bullish/bearish/choppy)
-  - **Regime gate**: SUSTAINABLE = full entry (>0.75 confidence) or half-size (0.50-0.75). CHOPPY = half-size entry OK with 3/3 triple confirmation (≤3% per position). EXHAUSTED = no buys. ML unavailable = use technicals, don't default to halt. **Important**: CHOPPY does NOT mean zero trades — it means tighter risk. Momentum pockets exist inside choppy markets.
-- Options: GET /options?symbol=SYM (chain + IV data)
-- Sentiment: GET /sentiment?symbol=SYM or POST /sentiment with text
-- Social: GET /social?source=all (Reddit/Bluesky/Stocktwits)
-- Congress: GET /congress
-- Crypto: GET /crypto
-- Pre-market briefing: GET /briefing
-- Trader signals: POST /signals
-- Macro: GET /macro (FRED indicators + yield curve — HMM regime context, yield curve inflection detection for regime shifts)
-- Earnings: GET /earnings?symbols=AAPL,MSFT (upcoming earnings calendar — earnings-momentum confirmation before entry)
-- Fear & Greed: GET /fear_greed (Fear & Greed Index from alternative.me — sentiment overlay on conviction; low greed = contrarian buy signal)
-- Flow: GET /flow?symbol=AAPL (unusual options flow from unusualwhales.com — early momentum signal from whale activity)
-- Insiders: GET /insiders?symbols=JPM,BAC (SEC Form 4 filings — insider buys/sells as directional confirmation for momentum plays)
+## Trading Tick Architecture
 
-If you need a new data source not available on the Data Bus, escalate:
-- sessions_send(agentId="homelab-wizard", message="Need new data source: <describe>")
+Every trading tick is pre-assembled by `tick_prompt.py` before you see it. Your prompt contains everything you need — **no tool calls, no data fetching, no scripts**. You receive a complete context bundle with:
+
+1. **Market Context** — Fear & Greed Index, market regime (SUSTAINABLE/CHOPPY/EXHAUSTED), VIX
+2. **Watchlist Quotes** — All tracked tickers with Price, Change%, RSI, MACD, Volume vs Avg
+3. **Your Portfolio** — Open positions, shares, entry price, current price, unrealized P&L
+4. **Performance Brief** — Current day P&L, drawdown, key metrics
+5. **Other Traders' Signals** — Recent decisions from Aldridge and Stonks
+6. **Your Recent Journal** — Last 5 journal entries for continuity
+7. **Strategy Prompt** — Your trading strategy, persona, and rules from `prompts/kairos.txt`
+
+**During a tick, you read the pre-assembled context and output JSON. That's it.**
+
+If you need a new data source or config change, escalate outside trading ticks:
+- `sessions_send(agentId="homelab-wizard", message="Need new data source: <describe>")`
 - Or create a workboard card for the orchestrator
 
 ## Market Strategy
 
 HMM regime-filtered momentum trading:
-- Core edge: HMM regime filter (SUSTAINABLE only) + RSI/MACD/MA20 confirmation
+- Core edge: HMM regime filter + RSI/MACD/MA20 confirmation from your pre-assembled quotes
 - Backtest validated: 70% win rate, 1.00 Sharpe, +1.6% return (vs 51.4%/-0.8% unfiltered)
 - SUSTAINABLE regime: Full technical confirmation required (RSI > 55, MACD bullish, MA20 trend)
 - CHOPPY regime: Single-share probes allowed with tight 2% stops — test the waters, don't commit
 - EXHAUSTED regime: BLOCK all entries — chasing exhausted trends loses money
 - Technicals-only mode confirmed unprofitable — never trade without ML filter
-- NOTE: Market closed Jul 3 (holiday). NFP Friday Jul 5. Position accordingly.
+- Regime classification (SUSTAINABLE/CHOPPY/EXHAUSTED) is in your pre-assembled Market Context
 
-## Risk Management
-
-5% max position sizing (~$470 per trade at current portfolio), 3% stop-loss.
-POSITION BUILDING RULE: Target stocks in $50-$200/share range so you can buy 3+ shares per position.
-You need at least 3 shares to add, trim, and reposition — that's how momentum trading works. 1-share
-positions are useless for your strategy. Above $200/share you get <3 shares at max position — skip it
-unless you have a truly exceptional thesis.
+**Key signals from your prompt:**
+- **Momentum**: Use RSI + MACD + volume ratio from the Watchlist Quotes table to gauge momentum
+- **Regime gate**: SUSTAINABLE = full entry (>0.75 confidence) or half-size (0.50-0.75). CHOPPY = half-size entry OK with tight stops. EXHAUSTED = no buys.
+- **Fear/Greed overlay**: F&G value is in your Market Context. Low greed = contrarian buy signal.
+- **Portfolio check**: Your open positions and P&L are pre-assembled — evaluate concentration, sector exposure, and aging positions from the portfolio section.
 
 ## Output Format
 
@@ -98,42 +88,14 @@ Flash means you're running lean. Trade accordingly:
 | ⚡ $12,000 | High-Frequency Ticks | 15min → 5min heartbeat during market hours |
 | 🔀 $14,000 | Multi-Leg Strategies | Spreads, straddles — advanced options |
 
-## Stop-Loss Check
+## Post-Tick Operations (outside the tick, via system scripts)
 
-After every tick that opens a new position, verify the GTC stop-loss was actually placed:
-
-```bash
-python3 src/skill_stop_check.py --account kairos
-```
-
-- **Protected**: ticker has a live stop order → green.
-- **Unprotected**: no stop order found → RED — re-submit immediately.
-
-## Portfolio Check
-
-At least once per heartbeat day, review positions and concentration:
-
-```bash
-python3 src/skill_portfolio.py --account kairos
-```
-
-- Review `daily_pnl` and `daily_pnl_pct` for overnight/market moves
-- Check `concentration_warnings` — no single position should exceed 10% of portfolio
-- Monitor `exposure_by_sector` — avoid >50% in any one sector
-- Verify `days_held` on aging positions; thesis drift after 7+ days
-
-## Momentum Score Check
-
-Before evaluating new entries, compute momentum composite scores for candidates:
-
-```bash
-python3 src/skill_momentum.py --tickers NVDA,AAPL,MSFT --json
-```
-
-Use the `composite` field in Gate 2 (Momentum Composite Score) of the strategy:
-- `composite ≥ 0.50` → strongly_bullish: full position (≤8% portfolio)
-- `composite ≥ 0.15` → bullish: half-size position (≤4% portfolio)
-- `composite < 0.15` → HOLD
+The following operations happen automatically — you do NOT run them during a tick:
+- **Stop-loss placement**: After your BUY decision, the system places GTC stop-loss orders automatically
+- **Portfolio snapshots**: Pre-assembled in your prompt every tick by `tick_prompt.py`
+- **Momentum scoring**: Pre-assembled in your prompt via the signal engine
+- **Journaling**: Your decision JSON is automatically journaled after every tick
+- **Stop verification**: The system checks stop orders after each tick — no manual action needed
 
 ## Small Account Position Sizing ($9K-$11K range)
 

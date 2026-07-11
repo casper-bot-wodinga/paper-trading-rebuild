@@ -79,12 +79,19 @@ def _make_synthetic_replay_report(total_pnl=150.0, win_rate=0.6, n_trades=5, err
     }
 
 
+class _FakeTrade:
+    """Trade-like object with real numeric pnl/pnl_net attributes."""
+    def __init__(self, pnl=0.0):
+        self.pnl = pnl
+        self.pnl_net = pnl
+
+
 def _make_fake_replay_result(pnl=50.0):
     """Create a fake ReplayResult for mocking score_variant."""
     class FakeResult:
         returns = np.array([0.01])
         equity_curve = np.array([10000.0, 10000.0 + pnl])
-        trades = [MagicMock(pnl=pnl)]
+        trades = [_FakeTrade(pnl=pnl)]
 
     return FakeResult()
 
@@ -193,7 +200,11 @@ class TestSweepResultsTable:
 
     def test_log_sweep_result_dry_run(self, temp_db):
         """Dry run should skip DB write."""
-        with patch("src.sweep_validation.sqlite3.connect", return_value=temp_db):
+        from src.sweep_validation import _TEST_CONNECTION
+        original = _TEST_CONNECTION
+        try:
+            import src.sweep_validation as sv
+            sv._TEST_CONNECTION = temp_db
             result = log_sweep_result(
                 {
                     "trader": "kairos",
@@ -202,50 +213,51 @@ class TestSweepResultsTable:
                 },
                 dry_run=True,
             )
+        finally:
+            sv._TEST_CONNECTION = original
         assert result is None
 
     def test_log_sweep_result_writes_row(self, temp_db):
         """Should write a row to sweep_results when table exists."""
-        temp_db.executescript(_SWEEP_TABLE_SQL)
+        import sqlite3
+        # Create a separate test connection so the fixture conn stays open
+        test_conn = sqlite3.connect(":memory:")
+        test_conn.row_factory = sqlite3.Row
+        test_conn.executescript(_SWEEP_TABLE_SQL)
 
-        class _NoCloseConn:
-            def __init__(self, real):
-                self._real = real
-            def execute(self, *a, **kw):
-                return self._real.execute(*a, **kw)
-            def commit(self):
-                self._real.commit()
-            def close(self):
-                pass
+        from src.sweep_validation import _TEST_CONNECTION
+        original = _TEST_CONNECTION
+        try:
+            import src.sweep_validation as sv
+            sv._TEST_CONNECTION = test_conn
 
-        wrapper = _NoCloseConn(temp_db)
-
-        with patch("src.sweep_validation._ensure_sweep_table", return_value=None):
-            with patch("src.sweep_validation.sqlite3.connect", return_value=wrapper):
-                row_id = log_sweep_result(
-                    {
-                        "run_at": "2026-07-06T10:00:00",
-                        "trader": "kairos",
-                        "variant_name": "momentum_focus",
-                        "variant_description": "Momentum focused",
-                        "train_date_range": "2026-06-20:2026-06-26",
-                        "val_date_range": "2026-06-27:2026-06-30",
-                        "variant_score": 0.45,
-                        "variant_llm_score": 1.2,
-                        "promoted": False,
-                        "phase1_winner": True,
-                        "phase2_winner": False,
-                        "signal_llm_divergence": True,
-                        "notes": "test divergence logging",
-                    },
-                    dry_run=False,
-                )
+            row_id = log_sweep_result(
+                {
+                    "run_at": "2026-07-06T10:00:00",
+                    "trader": "kairos",
+                    "variant_name": "momentum_focus",
+                    "variant_description": "Momentum focused",
+                    "train_date_range": "2026-06-20:2026-06-26",
+                    "val_date_range": "2026-06-27:2026-06-30",
+                    "variant_score": 0.45,
+                    "variant_llm_score": 1.2,
+                    "promoted": False,
+                    "phase1_winner": True,
+                    "phase2_winner": False,
+                    "signal_llm_divergence": True,
+                    "notes": "test divergence logging",
+                },
+                dry_run=False,
+            )
+        finally:
+            sv._TEST_CONNECTION = original
 
         assert row_id is not None
-        row = temp_db.execute("SELECT * FROM sweep_results WHERE id = ?", (row_id,)).fetchone()
+        row = test_conn.execute("SELECT * FROM sweep_results WHERE id = ?", (row_id,)).fetchone()
         assert row["trader"] == "kairos"
         assert row["variant_name"] == "momentum_focus"
         assert row["signal_llm_divergence"] == 1
+        test_conn.close()
 
 
 # ============================================================================

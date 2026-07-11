@@ -1,0 +1,59 @@
+# .dockerignore — reduce build context for all Dockerfiles
+# ==============================================================================
+# Shared between Dockerfile, Dockerfile.simulator, and any future service images.
+# Excludes everything not needed at runtime: git data, local state, caches,
+# Python bytecode, IDE files, and docs source.
+
+# ── Source control ────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# ── Local state & secrets ────────────────────────────────────────────────────
+.env
+.env.*
+state/
+logs/
+*.log
+*.lock
+Dockerfile
+Dockerfile.simulator
+
+# ── Python build artifacts ────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.whl
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── IDE & editors ────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Docs source (compiled READMEs are fine, raw specs don't need to ship) ─────
+docs/
+specs/
+
+# ── Data files (not needed in image — mounted as volumes at runtime) ─────────
+data/
+*.db
+*.sqlite3
+trading.db
+
+# ── Agent artifacts ──────────────────────────────────────────────────────────
+agents/
+prompts/
+skills/
+plans/

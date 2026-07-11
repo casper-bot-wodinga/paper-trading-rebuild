@@ -1,0 +1,79 @@
+# Dockerfile.simulator — Historical Trading Simulator
+# ==============================================================================
+# Isolated container for backtesting, strategy validation, and sweep runs.
+# No exposed ports — batch-processing only. Runs the simulation engine
+# from src/simulator.py with optional DB persistence of results.
+#
+# Build:
+#   docker build -t trading-simulator:latest -f Dockerfile.simulator .
+#
+# Run (nightly sweep):
+#   docker run --rm -e OPENROUTER_API_KEY=... trading-simulator:latest sweep --all
+#
+# Run (deep validation):
+#   docker run --rm -e OPENROUTER_API_KEY=... trading-simulator:latest deep --trader kairos
+#
+# Run (with DB):
+#   docker run --rm \
+#     -e OPENROUTER_API_KEY=... \
+#     -e SIM_DB_DSN=postgresql://trader:@trading-db:5432/trading \
+#     -v sim-state:/app/state \
+#     trading-simulator:latest sweep --trader kairos --days 5
+# ==============================================================================
+
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.title="Paper Trading — Historical Simulator"
+LABEL org.opencontainers.image.description="Backtesting & strategy validation engine for paper trading system"
+LABEL org.opencontainers.image.source="https://github.com/Tesselation-Studios/paper-trading-rebuild"
+LABEL org.opencontainers.image.version="1.0.0"
+
+# ── System deps ──────────────────────────────────────────────────────────────
+# curl is used by docker healthcheck (non-critical for batch jobs but included
+# for optional health-probe support). ca-certificates required for TLS.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python deps ──────────────────────────────────────────────────────────────
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+ENV PYTHONUNBUFFERED=1
+
+# ── Application code ─────────────────────────────────────────────────────────
+COPY . /app/
+WORKDIR /app
+
+# ── Environment defaults ─────────────────────────────────────────────────────
+# DB: optional — simulator can run with synthetic data if unset
+# ENV SIM_DB_DSN=postgresql://trader:@trading-db:5432/trading
+# ENV OPENROUTER_API_KEY=<required-for-llm>
+# ENV SIM_MODEL=deepseek/deepseek-v4-flash
+# ENV SIM_DATA_DIR=/app/data/market
+# ENV SIM_STATE_DIR=/app/state
+# ENV SIM_DEFAULT_STARTING_CASH=100000
+# ENV SIM_MAX_PARALLEL=8
+# ENV SIM_RELAX_ITERATIONS=3
+# ENV SIM_LOG_LEVEL=INFO
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+# State directory for lock files, logs, and run metadata
+VOLUME ["/app/state"]
+# Optional market data cache
+VOLUME ["/app/data/market"]
+
+# ── Entrypoint ───────────────────────────────────────────────────────────────
+# Dispatches to the simulation engine with subcommands:
+#   sweep --all|--trader <name>
+#   deep --trader <name>
+#   weekend
+#   analyze --trader <name>
+#   test --trader <name>
+ENTRYPOINT ["python3", "scripts/entrypoint_simulator.py"]
+CMD ["sweep", "--all"]
+
+# ── Healthcheck (optional — useful when deployed long-lived) ─────────────────
+# HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
+#   CMD curl -sf http://localhost:9100/health || exit 1

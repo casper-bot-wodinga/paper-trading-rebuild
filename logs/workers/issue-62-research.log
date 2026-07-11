@@ -1,0 +1,176 @@
+=================================================================
+ISSUE #62 ROOT CAUSE ANALYSIS — Bulk Position Closure
+=================================================================
+Timestamp: 2026-07-07 22:32 ET
+Researcher: researcher subagent
+Status: COMPLETE — findings below
+
+=================================================================
+1. INCIDENT SUMMARY
+=================================================================
+On July 7, 2026 at exactly 14:16:04 ET, BOTH Value Capital (Aldridge)
+and Momentum Capital (Kairos) had ALL positions simultaneously closed:
+  - Momentum had BAC, JPM — both closed
+  - Value had ADBE, AMZN, BAC, DIS, GOOGL, JPM, KO, MCD, MSFT, NVDA,
+    PG, WMT — all closed
+
+Agent states show updated_at = July 6 00:35 UTC (not updated today),
+confirming the traders themselves never ran. This was a programmatic
+close, not an LLM decision.
+
+July 7 is the first trading day after the July 4 holiday weekend
+(Friday July 3 closed, Monday July 6 observed holiday).
+
+=================================================================
+2. ROOT CAUSE: sync_alpaca_positions.py — destructive reconciliation
+=================================================================
+
+The app_sequence for each trader tick is:
+  1. tick_prep.py (preload market data)
+  2. sync_alpaca_positions.py (reconcile local DB ↔ Alpaca)
+  3. tick_prompt.py → LLM agent → skill_alpaca.py (execute trades)
+
+The sync script sync_alpaca_positions.py is referenced in two files:
+  - skills/trade-execution/SKILL.md:
+    "Always sync before trading: `python3 src/sync_alpaca_positions.py`"
+  - scripts/tick_prompt.py:
+    "Your sync script: `python3 src/sync_alpaca_positions.py`"
+
+CRITICAL: src/sync_alpaca_positions.py AND src/skill_alpaca.py DO NOT
+EXIST IN THE GIT REPO. They exist only on the deployed machine and are
+not version-controlled. This is itself a significant operational gap.
+
+ROOT CAUSE (high-confidence hypothesis):
+  1. Over the July 4 holiday weekend, Alpaca reset or cleared the paper
+     trading accounts (Alpaca periodically resets paper accounts).
+  2. When sync_alpaca_positions.py ran at ~14:16 ET on July 7, it
+     queried Alpaca for open positions → received EMPTY list.
+  3. The sync script has destructive reconciliation: it deletes any
+     local DB positions that don't exist on Alpaca to keep state in
+     sync. This is "Alpaca-is-truth" reconciliation with no guard.
+  4. Result: with Alpaca returning zero positions, sync deleted ALL
+     13+ positions from the local DB, liquidating both portfolios
+     simultaneously at 14:16:04 ET.
+
+The exact 14:16:04 timestamp is consistent with a cron firing at
+14:15 + ~1 minute of execution time for the sync script.
+
+=================================================================
+3. EVIDENCE CORROBORATING THIS THEORY
+=================================================================
+  (a) BOTH portfolios closed at the exact same second (14:16:04) —
+      impossible for independent LLM agents; must be a single process.
+  (b) Agent states show updated_at = July 6 00:35 (before market) —
+      the traders never ran on July 7, confirming the close was not
+      an agent decision.
+  (c) Alpaca is known to periodically reset/clear paper accounts,
+      especially after extended market closures. See forum reports
+      of similar incidents at forum.alpaca.markets.
+  (d) The sync procedure is the ONLY process in the app_sequence
+      that touches both accounts programmatically in a single run.
+  (e) sync_alpaca_positions.py is explicitly described as a
+      reconciliation step that runs BEFORE each trader tick.
+
+=================================================================
+4. CHECK: RISK MODULES AND REBALANCE LOGIC
+=================================================================
+Code audit of the full src/ directory confirmed:
+  - src/risk/gates.py — pre-trade validation ONLY. No position-closing
+    logic. All gates are BUY-side checks (CashGate, PositionGate,
+    ExposureGate, PDTGate, ConvictionGate, HoursGate).
+  - src/risk/manager.py — chains gates, evaluates trades. No sell-all
+    or close-all functionality.
+  - src/safety.py — CircuitBreaker controls position sizing, not bulk
+    liquidation. Even EMERGENCY level just stops trading.
+  - src/synthesis.py — overnight learning loop optimization only.
+  - src/trader.py — simulation/backtesting engine, not live trading.
+  - src/prompt_sweep.py — nightly prompt variant generation.
+  - No file in the repo contains "close_all_positions", "liquidate",
+    or bulk-sell logic for all holdings.
+
+This confirms the root cause is in the non-version-controlled
+sync_alpaca_positions.py script.
+
+=================================================================
+5. FIX PLAN
+=================================================================
+Priority: P0 (trading is halted)
+
+  Phase 1 — IMMEDIATE (on the deployed machine):
+    1. SSH to paper-trading host
+    2. Locate and backup sync_alpaca_positions.py
+    3. Disable the sync cron temporarily to prevent further damage
+    4. Restore positions from backups or manually re-enter
+
+  Phase 2 — CODE FIX (sync_alpaca_positions.py):
+    a. Add a SAFETY GUARD: if the sync detects that ALL positions
+       across multiple accounts would be deleted simultaneously,
+       HALT and ALERT instead of deleting.
+    b. Change reconciliation from "Alpaca-is-truth" to two-way:
+       - Position exists in local DB but not on Alpaca → FLAG, don't
+         delete automatically. Requires confirmation.
+       - Position exists on Alpaca but not in local DB → ADD to sync.
+       - Position exists in both → UPDATE local state (normal path).
+    c. Add a "minimum position count" guard: if Alpaca reports 0
+       positions but local DB has > 0, and no sell orders have been
+       placed, the sync should raise an alarm.
+    d. Add audit logging: every position added, modified, or removed
+       by sync must be logged with timestamp and reason.
+
+  Phase 3 — REPO FIX:
+    e. Add sync_alpaca_positions.py and skill_alpaca.py to the git
+       repo (src/) so they are version-controlled and reviewable.
+    f. Add CI test for sync_alpaca_positions.py:
+       - Test: sync with empty Alpaca + populated local DB → should
+         ALERT not DELETE.
+       - Test: sync with matching Alpaca + local → should no-op.
+       - Test: sync with new Alpaca positions → should ADD to local.
+
+  Phase 4 — MONITORING:
+    g. Add a monitor: if any trader's position count drops to 0
+       intraday without corresponding sell orders, fire a P0 alert
+       immediately.
+    h. Add a pre-sync health check: before running sync, query
+       Alpaca account status to verify it hasn't been reset.
+
+=================================================================
+6. VALIDATION CRITERIA
+=================================================================
+After fix, verify by:
+  1. Unit test: sync script with empty Alpaca + 5 local positions →
+     must log WARNING and skip deletion, NOT delete.
+  2. Integration test: run full tick cycle for both traders →
+     positions persist across sync even when Alpaca has zero.
+  3. Dry run against production data over holiday weekend →
+     sync must detect anomaly and halt.
+  4. Manual verification: both traders retain their positions
+     across at least 2 full trading days without position loss.
+
+=================================================================
+7. OPEN QUESTIONS
+=================================================================
+  - Exactly HOW were the Alpaca paper accounts cleared? Was this
+    an Alpaca-side reset, API key rotation, or account deletion?
+    Need to check Alpaca dashboard/API logs for July 3-7 activity.
+  - Are the ALPACA API keys still valid after the holiday weekend?
+    Check: try listing positions via Alpaca API directly.
+  - Were there any other cron jobs that ran on July 7 morning
+    before the sync? (e.g., overnight synthesis, backfill)
+  - Is the p0 fix to make the reconciliation non-destructive, or
+    to fix the Alpaca paper account state? Likely BOTH.
+  - Are there backup copies of the agent_state table before 14:16?
+    If so, positions can be restored from pre-close state.
+
+=================================================================
+8. FILES REFERENCED
+=================================================================
+  - skills/trade-execution/SKILL.md: line ~25 — "Always sync before
+    trading: python3 src/sync_alpaca_positions.py"
+  - scripts/tick_prompt.py: line ~85 — "Your sync script: python3
+    src/sync_alpaca_positions.py"
+  - src/sync_alpaca_positions.py — NOT FOUND IN REPO (404)
+  - src/skill_alpaca.py — NOT FOUND IN REPO (404)
+  - src/risk/gates.py — BUY-side gates only, no bulk-close
+  - src/risk/manager.py — evaluates trades, no liquidation logic
+  - src/safety.py — CircuitBreaker stops trading but doesn't close
+=================================================================

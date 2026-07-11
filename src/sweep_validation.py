@@ -24,6 +24,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import sqlite3
+
 import psycopg2
 import psycopg2.extras
 import sqlite3
@@ -170,20 +172,82 @@ class Phase2Result:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Database: sweep_results table (Postgres)
+# Sweep results table schema (SQLite — for testing)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SWEEP_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS sweep_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at TEXT,
+    trader TEXT,
+    variant_name TEXT,
+    variant_description TEXT,
+    train_date_range TEXT,
+    val_date_range TEXT,
+    baseline_score REAL DEFAULT 0.0,
+    variant_score REAL DEFAULT 0.0,
+    variant_llm_score REAL DEFAULT 0.0,
+    calmar REAL DEFAULT 0.0,
+    profit_factor REAL DEFAULT 0.0,
+    win_rate REAL DEFAULT 0.0,
+    n_trades INTEGER DEFAULT 0,
+    cost_adjusted_pnl REAL DEFAULT 0.0,
+    promoted INTEGER DEFAULT 0,
+    branch_name TEXT,
+    signal_params_json TEXT,
+    phase1_winner INTEGER DEFAULT 0,
+    phase2_winner INTEGER DEFAULT 0,
+    signal_llm_divergence INTEGER DEFAULT 0,
+    notes TEXT
+);
+"""
+
+# Internal: if not None, use this SQLite connection instead of Postgres (for testing)
+_TEST_CONNECTION: Optional[sqlite3.Connection] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Database: sweep_results table (Postgres, with sqlite3 testing fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _get_pg_conn() -> psycopg2.extensions.connection:
-    """Get a sync Postgres connection to the trading database."""
+def _get_pg_conn():
+    """Get a sync Postgres connection to the trading database.
+
+    If _TEST_CONNECTION is set (by tests), returns that SQLite connection
+    instead of connecting to the real Postgres database.
+    """
+    if _TEST_CONNECTION is not None:
+        return _TEST_CONNECTION
     conn = psycopg2.connect(DB_DSN)
     conn.autocommit = False
     return conn
 
 
 def _ensure_sweep_table() -> None:
-    """No-op: sweep_results table is managed by schema.sql migrations."""
-    pass
+    """Ensure the sweep_results table exists.
+
+    In production this is a no-op (managed by schema.sql migrations).
+    During testing, creates the SQLite table if needed.
+    """
+    if _TEST_CONNECTION is not None:
+        _TEST_CONNECTION.executescript(_SWEEP_TABLE_SQL)
+        _TEST_CONNECTION.commit()
+
+
+def _get_pg_cursor():
+    """Get a connection and cursor (PG or SQLite depending on test flag).
+
+    Returns (conn, cur) tuple.
+    """
+    conn = _get_pg_conn()
+    _ensure_sweep_table()
+    if isinstance(conn, sqlite3.Connection):
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+    else:
+        cur = conn.cursor()
+    return conn, cur
 
 
 def log_sweep_result(
@@ -205,10 +269,51 @@ def log_sweep_result(
     if dry_run:
         return None
 
-    conn = _get_pg_conn()
-    try:
-        cur = conn.cursor()
+    # Determine if we're in SQLite test mode
+    is_sqlite = _TEST_CONNECTION is not None
 
+    conn, cur = _get_pg_cursor()
+    try:
+        if is_sqlite:
+            # SQLite testing path: insert into flat sweep_results table
+            cur.execute(
+                """INSERT INTO sweep_results
+                   (run_at, trader, variant_name, variant_description,
+                    train_date_range, val_date_range, baseline_score,
+                    variant_score, variant_llm_score, calmar, profit_factor,
+                    win_rate, n_trades, cost_adjusted_pnl, promoted,
+                    branch_name, signal_params_json, phase1_winner,
+                    phase2_winner, signal_llm_divergence, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    result.get("run_at", ""),
+                    result.get("trader", ""),
+                    result.get("variant_name", ""),
+                    result.get("variant_description", ""),
+                    result.get("train_date_range", ""),
+                    result.get("val_date_range", ""),
+                    result.get("baseline_score", 0.0),
+                    result.get("variant_score", 0.0),
+                    result.get("variant_llm_score", 0.0),
+                    result.get("calmar", 0.0),
+                    result.get("profit_factor", 0.0),
+                    result.get("win_rate", 0.0),
+                    result.get("n_trades", 0),
+                    result.get("cost_adjusted_pnl", 0.0),
+                    1 if result.get("promoted", False) else 0,
+                    result.get("branch_name", ""),
+                    result.get("signal_params_json", ""),
+                    1 if result.get("phase1_winner", False) else 0,
+                    1 if result.get("phase2_winner", False) else 0,
+                    1 if result.get("signal_llm_divergence", False) else 0,
+                    result.get("notes", ""),
+                ),
+            )
+            conn.commit()
+            row_id = cur.lastrowid
+            return row_id
+
+        # Postgres path: use sweep_runs + sweep_results with validation_meta JSONB
         # Ensure a sweep_run exists for this trader+time combination
         cur.execute(
             """INSERT INTO trading.sweep_runs
@@ -273,12 +378,12 @@ def log_sweep_result(
             (
                 run_id,
                 result.get("trader", ""),
-                abs(hash(result.get("variant_name", ""))) % 100000,  # variant_id as int
-                "",  # params_hash — unused for two-phase
-                result.get("variant_score", 0.0),  # objective_score
+                abs(hash(result.get("variant_name", ""))) % 100000,
+                "",
+                result.get("variant_score", 0.0),
                 result.get("calmar", 0.0),
                 result.get("profit_factor", 0.0),
-                result.get("cost_adjusted_pnl", 0.0),  # total_pnl
+                result.get("cost_adjusted_pnl", 0.0),
                 result.get("n_trades", 0),
                 result.get("win_rate", 0.0),
                 validation_meta,
@@ -294,7 +399,8 @@ def log_sweep_result(
         print(f"[sweep_validation] DB error logging result: {e}", file=sys.stderr)
         return None
     finally:
-        conn.close()
+        if not is_sqlite:
+            conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -382,8 +488,9 @@ def run_phase1_signal_sweep(
         ls, lr = score_variant(variant, last_ticks)
         variant.score = ls
         variant.calmar = float(compute_calmar(lr.returns, lr.equity_curve))
+        # Use net trade PnL if cost model was applied, fall back to gross
         variant.profit_factor = float(
-            compute_profit_factor([t.pnl for t in lr.trades])
+            compute_profit_factor([getattr(t, "pnl_net", t.pnl) for t in lr.trades])
         )
         variant.n_trades = len(lr.trades)
 

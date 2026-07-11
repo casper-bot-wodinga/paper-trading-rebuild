@@ -267,10 +267,12 @@ class SimulationRunner:
         replay_result = self.harness._build_result(len(self.market_data))
 
         # Score
+        # Use net trade PnL if cost model was applied, fall back to gross
+        trade_pnls = [getattr(t, "pnl_net", t.pnl) for t in replay_result.trades]
         score = objective_score(
             returns=np.array(returns, dtype=np.float64),
             equity=np.array(equity_curve, dtype=np.float64),
-            trades=[t.pnl for t in replay_result.trades],
+            trades=trade_pnls,
         )
 
         # Restore params so next scenario starts clean
