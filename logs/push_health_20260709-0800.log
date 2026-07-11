@@ -1,0 +1,6 @@
+=== push_health.sh @ 20260709-0800 ===
+Board: trading
+JUnit: none
+
+[canvas_dashboard] Health push failed: The read operation timed out
+Failed to push dashboard — check ~/canvas/.env and Canvas connectivity.

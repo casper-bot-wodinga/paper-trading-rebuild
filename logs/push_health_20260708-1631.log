@@ -1,0 +1,8 @@
+=== push_health.sh @ 20260708-1631 ===
+Board: trading
+JUnit: none
+
+Traceback (most recent call last):
+  File "/home/raf/projects/paper-trading-rebuild/src/canvas_dashboard.py", line 28, in <module>
+    from src.observability import metrics, alert
+ModuleNotFoundError: No module named 'src'

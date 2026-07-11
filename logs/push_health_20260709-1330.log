@@ -1,0 +1,6 @@
+=== push_health.sh @ 20260709-1330 ===
+Board: trading
+JUnit: none
+
+[canvas_dashboard] Health push failed: HTTP Error 502: Bad Gateway
+Failed to push dashboard — check ~/canvas/.env and Canvas connectivity.

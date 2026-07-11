@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
+import sqlite3
 
 # ── Project paths ────────────────────────────────────────────────────────────
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -58,6 +59,34 @@ from metrics import compute_calmar, compute_profit_factor  # type: ignore[import
 
 # ── Default initial cash matches replay_controller.py ─────────────────────────
 DEFAULT_INITIAL_CASH = 10000.0
+
+# SQLite-compatible sweep_results table definition (for testing)
+_SWEEP_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS sweep_results (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    trader              VARCHAR(32),
+    variant_name        VARCHAR(64),
+    variant_description TEXT,
+    train_date_range    VARCHAR(64),
+    val_date_range      VARCHAR(64),
+    baseline_score      REAL,
+    variant_score       REAL,
+    variant_llm_score   REAL,
+    calmar              REAL,
+    profit_factor       REAL,
+    win_rate            REAL,
+    n_trades            INTEGER,
+    cost_adjusted_pnl   REAL,
+    promoted            INTEGER DEFAULT 0,
+    branch_name         VARCHAR(64),
+    signal_params_json  TEXT,
+    phase1_winner       INTEGER DEFAULT 0,
+    phase2_winner       INTEGER DEFAULT 0,
+    signal_llm_divergence REAL DEFAULT 0.0,
+    notes               TEXT
+);
+"""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Configuration

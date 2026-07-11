@@ -1,0 +1,6 @@
+=== push_health.sh @ 20260709-1410 ===
+Board: trading
+JUnit: none
+
+[canvas_dashboard] Health push failed: <urlopen error [Errno 101] Network is unreachable>
+Failed to push dashboard — check ~/canvas/.env and Canvas connectivity.
