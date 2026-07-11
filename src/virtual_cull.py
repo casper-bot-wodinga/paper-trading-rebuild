@@ -4,11 +4,14 @@
 Runs Sunday 23:00 ET.
   1. Rank all virtuals by 7-day rolling P&L (realized + unrealized)
   2. Cull bottom 3 per base trader (mark status='culled', set culled_at)
-  3. Generate 3 new variants:
-     a. 1 param variant: random perturbation of the #1 virtual's params
-     b. 1 prompt variant: placeholder (weight adjustment to simulate prompt change)
+  3. Generate 3 new variants, sourcing at least one from prompt_sweep results:
+     a. 1 sweep-sourced variant (from prompt_sweep results or DB probation pool)
+     b. 1 param variant: random perturbation of the #1 virtual's params
      c. 1 wildcard: random new config within safe bounds
   4. New virtuals get status='probation' (2-day wait before promotion eligible)
+  5. When sweep results are stale (>7 days) or unavailable, fall back to random
+     generation (variant_type='random').
+  6. Errors in the sweep-pulling path don't crash the cull cycle.
 
 Usage:
     python3 src/virtual_cull.py                    # run once (for cron)
@@ -16,6 +19,7 @@ Usage:
     python3 src/virtual_cull.py --once              # run once (default, for testing)
     python3 src/virtual_cull.py --cull-count 2      # cull only 2 instead of 3
     python3 src/virtual_cull.py --base kairos       # only cull one base trader
+    python3 src/virtual_cull.py --force-random      # skip sweep lookup, use random only
 """
 
 from __future__ import annotations
@@ -50,6 +54,23 @@ BASE_TRADERS = ["kairos", "aldridge", "stonks"]
 DEFAULT_CULL_COUNT = 3
 P7D_LOOKBACK_DAYS = 7
 PROBATION_DAYS = 2
+
+# Sweep results config
+SWEEP_RESULTS_DIR = str(
+    Path(__file__).resolve().parent.parent / "results"
+)
+SWEEP_MAX_AGE_DAYS = 7
+SHORT_NAMES = {
+    "trader-kairos": "kairos",
+    "trader-aldridge": "aldridge",
+    "trader-stonks": "stonks",
+}
+# Reverse mapping: short name -> sweep results trader key
+_TRAIDER_TO_SHORT = {
+    "kairos": "kairos",
+    "aldridge": "aldridge",
+    "stonks": "stonks",
+}
 
 # Mapping from seed-style dot-notation config keys to flat SignalParams names
 _CONFIG_KEY_MAP: Dict[str, str] = {
@@ -219,6 +240,294 @@ def get_param_value(config: Dict[str, Any], param_name: str) -> Optional[float]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Sweep variant pulling — find recent prompt_sweep results to use as replacements
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _find_sweep_results_files(results_dir: str = SWEEP_RESULTS_DIR) -> List[Path]:
+    """Find all sweep results JSON files (non-empty, valid JSON) in results_dir.
+
+    Returns paths sorted by modification time (newest first).
+    """
+    dir_path = Path(results_dir)
+    if not dir_path.exists():
+        log.debug("  Sweep results dir %s does not exist", results_dir)
+        return []
+
+    json_files = sorted(
+        dir_path.glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return json_files
+
+
+def _is_results_fresh(file_path: Path, max_age_days: int = SWEEP_MAX_AGE_DAYS) -> bool:
+    """Check if a results file is recent enough to use.
+
+    Uses the file's modification time. Returns True if modified within
+    max_age_days of today.
+    """
+    mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+    age = datetime.now(timezone.utc) - mtime
+    return age.days < max_age_days
+
+
+def _read_sweep_results_json(file_path: Path) -> Optional[Dict[str, Any]]:
+    """Parse a sweep results JSON file.
+
+    Expected format (from prompt_sweep.py / promote_sweep_winner.py):
+    {
+        "sweep_date": "2026-07-10",
+        "results": [
+            {
+                "trader": "kairos",
+                "date": "2026-07-10",
+                "baseline_score": 0.123,
+                "variants": [
+                    {
+                        "variant_name": "wider_stops",
+                        "score": 0.456,
+                        "signal_params": {"momentum_threshold": 0.3, ...}
+                    }
+                ],
+                "winner": {"variant_name": "wider_stops", ...}
+            }
+        ]
+    }
+
+    Returns the parsed dict, or None on failure.
+    """
+    try:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            log.warning("  Sweep results file %s is not a JSON object", file_path)
+            return None
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning("  Could not read sweep results file %s: %s", file_path, e)
+        return None
+
+
+def _extract_sweep_variants_for_trader(
+    results_data: Dict[str, Any],
+    base_trader: str,
+) -> List[Dict[str, Any]]:
+    """Extract scored sweep variants for a given base trader from sweep results.
+
+    Looks for the trader in the sweep results data and returns all variants
+    (including the winner) that have signal_params. Results are sorted by
+    score descending.
+
+    Returns:
+        List of dicts with keys:
+            variant_name, score, signal_params, config (flat param dict)
+    """
+    sweep_results = results_data.get("results", [])
+    sweep_date = results_data.get("sweep_date", results_data.get("date", "unknown"))
+
+    trader_entry = None
+    for sr in sweep_results:
+        # The trader key can be a short name ("kairos") or long ("trader-kairos")
+        trader_key = sr.get("trader", "")
+        if trader_key == base_trader or trader_key == f"trader-{base_trader}":
+            trader_entry = sr
+            break
+
+    if trader_entry is None:
+        log.debug("  No sweep results for trader %s in %s", base_trader, sweep_date)
+        return []
+
+    variants = trader_entry.get("variants", [])
+    if not variants:
+        log.debug("  No variants in sweep results for trader %s", base_trader)
+        return []
+
+    extracted: List[Dict[str, Any]] = []
+    for v in variants:
+        signal_params = v.get("signal_params", {})
+        if not signal_params or not isinstance(signal_params, dict):
+            continue
+
+        variant_name = v.get("variant_name", "unknown")
+        score = v.get("score", 0.0)
+
+        # Build flat config from signal_params
+        config: Dict[str, float] = {}
+        for name in SignalParams.param_names():
+            if name in signal_params:
+                try:
+                    config[name] = float(signal_params[name])
+                except (TypeError, ValueError):
+                    pass
+
+        if config:
+            extracted.append({
+                "variant_name": variant_name,
+                "score": score,
+                "signal_params": signal_params,
+                "config": config,
+            })
+
+    # Sort by score descending
+    extracted.sort(key=lambda v: v["score"], reverse=True)
+    return extracted
+
+
+def _find_probationary_sweep_virtuals(base_trader: str) -> List[Dict[str, Any]]:
+    """Find probationary from_sweep virtuals in the DB for this base trader.
+
+    Returns:
+        List of dicts with keys: name, config, created_at, score (from config).
+        Empty list if none found.
+    """
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute(
+            """SELECT name, config, created_at
+               FROM trading.virtual_traders
+               WHERE base_trader = %s
+                 AND variant_type = 'from_sweep'
+                 AND status = 'probation'
+                 AND created_at >= %s
+               ORDER BY created_at DESC""",
+            (base_trader, date.today() - timedelta(days=SWEEP_MAX_AGE_DAYS)),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        log.debug("  No probationary from_sweep virtuals for %s", base_trader)
+        return []
+
+    extracted: List[Dict[str, Any]] = []
+    for row in rows:
+        raw_config = row.get("config", {})
+        if isinstance(raw_config, str):
+            try:
+                raw_config = json.loads(raw_config)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(raw_config, dict):
+            continue
+
+        # Normalize config to flat params
+        config = normalize_config(raw_config)
+
+        extracted.append({
+            "name": row["name"],
+            "config": config,
+            "created_at": row["created_at"],
+        })
+
+    return extracted
+
+
+def _make_sweep_variant_name(
+    base_trader: str,
+    variant_name: str,
+    sweep_date: str,
+) -> str:
+    """Generate a unique virtual trader name for a sweep-sourced variant.
+
+    Format: {base_trader}-sweep-{variant_name}-{date}
+    Example: kairos-sweep-wider-stops-20260710
+    """
+    safe_variant = variant_name.replace("_", "-").lower()
+    safe_date = sweep_date.replace("-", "")
+    return f"{base_trader}-sweep-{safe_variant}-{safe_date}"
+
+
+def _pull_sweep_variants_for_replacement(
+    base_trader: str,
+) -> List[Dict[str, Any]]:
+    """Pull prompt_sweep variants for use as culling replacements.
+
+    Priority:
+      1. Probationary virtuals in DB with variant_type='from_sweep' (recent)
+      2. Sweep results JSON files in results/ (recent, not yet promoted)
+
+    Returns:
+        List of dicts with keys: name, config, variant_name (for logging),
+        score.
+        Each entry can be used as a replacement virtual trader. Empty list
+        if no fresh sweep results are available.
+    """
+    variants: List[Dict[str, Any]] = []
+
+    # Priority 1: Check DB for probationary from_sweep virtuals
+    try:
+        db_virtuals = _find_probationary_sweep_virtuals(base_trader)
+        for v in db_virtuals:
+            variants.append({
+                "name": v["name"],
+                "config": v["config"],
+                "variant_name": v["name"],
+                "score": 0.0,  # Score not stored in DB config
+                "source": "db_probation",
+            })
+        if variants:
+            log.info(
+                "  Found %d probationary from_sweep virtuals for %s",
+                len(variants), base_trader,
+            )
+    except Exception as e:
+        log.warning("  Error probing DB for sweep virtuals: %s", e)
+
+    # Priority 2: Check results/ for sweep JSON files
+    try:
+        sweep_files = _find_sweep_results_files()
+        fresh_files = [f for f in sweep_files if _is_results_fresh(f)]
+
+        if not fresh_files:
+            log.debug("  No fresh sweep results files found (checked %d files)",
+                       len(sweep_files))
+        else:
+            for file_path in fresh_files:
+                results_data = _read_sweep_results_json(file_path)
+                if results_data is None:
+                    continue
+
+                json_variants = _extract_sweep_variants_for_trader(
+                    results_data, base_trader,
+                )
+                sweep_date = results_data.get(
+                    "sweep_date",
+                    results_data.get("date", "unknown"),
+                )
+
+                for jv in json_variants:
+                    name = _make_sweep_variant_name(
+                        base_trader, jv["variant_name"], sweep_date,
+                    )
+                    variants.append({
+                        "name": name,
+                        "config": jv["config"],
+                        "variant_name": jv["variant_name"],
+                        "score": jv["score"],
+                        "source": f"results_json:{file_path.name}",
+                    })
+
+                if json_variants:
+                    log.info(
+                        "  Found %d variants from sweep file %s for %s",
+                        len(json_variants), file_path.name, base_trader,
+                    )
+    except Exception as e:
+        log.warning("  Error reading sweep results files: %s", e)
+
+    # Deduplicate by name — keep the one with the highest score
+    seen: Dict[str, Dict[str, Any]] = {}
+    for v in variants:
+        if v["name"] not in seen or v["score"] > seen[v["name"]]["score"]:
+            seen[v["name"]] = v
+
+    return list(seen.values())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Variant generation
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -276,11 +585,11 @@ def generate_param_variant(
 
 
 def generate_prompt_variant(base_trader: str) -> Tuple[str, Dict[str, Any]]:
-    """Generate a prompt variant — placeholder for future sweep integration.
+    """Generate a prompt variant — fallback when no sweep results available.
 
-    Currently simulates a prompt change by adjusting signal weights and
-    confidence thresholds. Real prompt variants will come from the prompt_sweep
-    pipeline.
+    Simulates a prompt change by adjusting signal weights and
+    confidence thresholds. Superseded by sweep-sourced variants when
+    prompt_sweep results are available.
 
     Returns:
         (name, flat_config_dict)
@@ -334,8 +643,8 @@ def generate_wildcard(base_trader: str) -> Tuple[str, Dict[str, Any]]:
     return name, new_config
 
 
-# Ordered generators: param, prompt, wildcard
-GENERATORS: List[Tuple[str, Any]] = [
+# Ordered fallback generators (used when no sweep variants available)
+_FALLBACK_GENERATORS: List[Tuple[str, Any]] = [
     ("params", generate_param_variant),
     ("prompt", generate_prompt_variant),
     ("wildcard", generate_wildcard),
@@ -415,10 +724,22 @@ def cull_base_trader(
     base_trader: str,
     cull_count: int = DEFAULT_CULL_COUNT,
     dry_run: bool = False,
+    force_random: bool = False,
 ) -> Dict[str, Any]:
     """Run culling and regeneration for one base trader.
 
-    Returns summary dict.
+    Sources at least one replacement from prompt_sweep results when available.
+    Falls back to random variant generation when sweep results are stale
+    (>7 days) or unavailable.
+
+    Args:
+        base_trader: Short name of the base trader (e.g., 'kairos').
+        cull_count: Number of virtuals to cull (and generate) per base.
+        dry_run: If True, log intent but don't modify DB.
+        force_random: If True, skip sweep lookup entirely.
+
+    Returns:
+        Summary dict with keys: base_trader, status, culled, generated, etc.
     """
     log.info("── %s ───────────────────────────────────────────────", base_trader.upper())
 
@@ -468,25 +789,76 @@ def cull_base_trader(
         if not dry_run:
             cull_virtual(name)
 
-    # ── Step 5: Generate replacements ──
+    # ── Step 5: Pull sweep variants for replacements ──
+    sweep_variants: List[Dict[str, Any]] = []
+    if not force_random:
+        try:
+            sweep_variants = _pull_sweep_variants_for_replacement(base_trader)
+        except Exception as e:
+            log.warning(
+                "  Error pulling sweep variants for %s (will use fallback): %s",
+                base_trader, e,
+            )
+            sweep_variants = []
+
+    # ── Step 6: Generate replacements ──
     log.info("  Generating %d new variants:", len(bottom))
-    new_virtuals = []
-    for i, (gen_type, gen_fn) in enumerate(GENERATORS[:len(bottom)]):
-        if gen_type == "params":
-            new_name, new_config = gen_fn(base_trader, top_config)
-        else:
-            new_name, new_config = gen_fn(base_trader)
+    new_virtuals: List[Tuple[str, str, Dict[str, Any]]] = []
+    sweep_index = 0
 
-        new_virtuals.append((new_name, gen_type, new_config))
-        log.info("    %d. %-30s (type=%s)", i + 1, new_name, gen_type)
+    for i in range(len(bottom)):
+        # Try to use a sweep-sourced variant first
+        if sweep_index < len(sweep_variants):
+            sv = sweep_variants[sweep_index]
+            sweep_index += 1
 
-        if not dry_run:
-            insert_virtual(new_name, base_trader, gen_type, new_config, status="probation")
+            new_name = sv["name"]
+            new_config = sv["config"]
+            variant_type = "from_sweep"
+            source_label = sv.get("variant_name", "sweep")
+
+            new_virtuals.append((new_name, variant_type, new_config))
+            score_str = f" (score: {sv['score']:.4f})" if sv.get("score", 0.0) != 0.0 else ""
+            log.info(
+                "    %d. %-30s (type=%s, from sweep: %s)%s",
+                i + 1, new_name, variant_type, source_label, score_str,
+            )
+
+            if not dry_run:
+                insert_virtual(
+                    new_name, base_trader, variant_type, new_config,
+                    status="probation",
+                )
+            continue
+
+        # Fallback: use random generators
+        gen_idx = i - sweep_index
+        if gen_idx < len(_FALLBACK_GENERATORS):
+            gen_type, gen_fn = _FALLBACK_GENERATORS[gen_idx]
+            if gen_type == "params":
+                new_name, new_config = gen_fn(base_trader, top_config)
+            else:
+                new_name, new_config = gen_fn(base_trader)
+
+            variant_type = "random"
+            new_virtuals.append((new_name, variant_type, new_config))
+            log.info("    %d. %-30s (type=%s, %s fallback)", i + 1, new_name, variant_type, gen_type)
+
+            if not dry_run:
+                insert_virtual(
+                    new_name, base_trader, variant_type, new_config,
+                    status="probation",
+                )
+
+    sweep_sourced = sum(1 for _, vt, _ in new_virtuals if vt == "from_sweep")
+    random_sourced = sum(1 for _, vt, _ in new_virtuals if vt == "random")
 
     return {
         "base_trader": base_trader,
         "culled": [name for name, _ in bottom],
         "generated": [name for name, _, _ in new_virtuals],
+        "sweep_sourced": sweep_sourced,
+        "random_sourced": random_sourced,
         "top_trader": top_name,
         "top_pnl": top_pnl,
         "status": "ok",
@@ -501,6 +873,8 @@ def print_summary(results: List[Dict[str, Any]]):
     """Print human-readable summary to stdout."""
     total_culled = sum(len(r.get("culled", [])) for r in results)
     total_generated = sum(len(r.get("generated", [])) for r in results)
+    total_sweep = sum(r.get("sweep_sourced", 0) for r in results)
+    total_random = sum(r.get("random_sourced", 0) for r in results)
 
     print()
     print("═" * 72)
@@ -522,21 +896,28 @@ def print_summary(results: List[Dict[str, Any]]):
         generated = r.get("generated", [])
         top = r.get("top_trader", "?")
         top_pnl = r.get("top_pnl", 0)
+        sweep_src = r.get("sweep_sourced", 0)
+        random_src = r.get("random_sourced", 0)
 
         print(f"\n  📊 {bt}")
         print(f"     Top:       {top}  (7d P&L: ${top_pnl:.2f})")
         print(f"     Culled:    {', '.join(culled) if culled else 'none'}")
         print(f"     Generated: {', '.join(generated) if generated else 'none'}")
+        if sweep_src or random_src:
+            print(f"     Sources:   {sweep_src} sweep-sourced, {random_src} random")
 
     print(f"\n{'═' * 72}")
-    print(f"  Summary: {total_culled} culled, {total_generated} generated")
+    print(f"  Summary: {total_culled} culled, {total_generated} generated "
+          f"({total_sweep} from sweep, {total_random} random)")
     print(f"{'═' * 72}\n")
 
 
 def main():
     global DB_DSN, BASE_TRADERS
 
-    parser = argparse.ArgumentParser(description="Virtual Trader Culling — weekly cleanup")
+    parser = argparse.ArgumentParser(
+        description="Virtual Trader Culling — weekly cleanup with prompt_sweep integration"
+    )
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would happen without writing to DB")
     parser.add_argument("--once", action="store_true",
@@ -547,9 +928,15 @@ def main():
                         help="Only cull one base trader (default: all three)")
     parser.add_argument("--db-dsn", type=str, default=DB_DSN,
                         help="Postgres connection string")
+    parser.add_argument("--force-random", action="store_true",
+                        help="Skip sweep result lookup, generate all variants randomly")
+    parser.add_argument("--sweep-results-dir", type=str, default=SWEEP_RESULTS_DIR,
+                        help="Directory containing sweep results JSON files")
     args = parser.parse_args()
 
     DB_DSN = args.db_dsn
+    global SWEEP_RESULTS_DIR
+    SWEEP_RESULTS_DIR = args.sweep_results_dir
 
     logging.basicConfig(
         level=logging.INFO,
@@ -560,6 +947,9 @@ def main():
     log.info("═" * 60)
     log.info("Virtual Trader Culling — %s", "DRY RUN" if args.dry_run else "LIVE")
     log.info("Date: %s | Cull count: %d", date.today(), args.cull_count)
+    log.info("Sweep results dir: %s", SWEEP_RESULTS_DIR)
+    if args.force_random:
+        log.info("FORCE-RANDOM mode — skipping sweep result lookup")
 
     # Determine which base traders to cull
     if args.base:
@@ -578,6 +968,7 @@ def main():
                 bt,
                 cull_count=args.cull_count,
                 dry_run=args.dry_run,
+                force_random=args.force_random,
             )
             results.append(result)
         except Exception as e:
