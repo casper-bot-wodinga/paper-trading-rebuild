@@ -341,8 +341,8 @@ def assemble_prompt(trader_id: str, db_path: str | None = None) -> str:
 ```
 4. You have NO tools. All context is pre-assembled above. Output JSON only.
 
-REMEMBER: thesis MUST be 20+ chars, signals_used MUST have at least 1 entry,
-confidence ≥ 0.3. A HOLD with idle cash is a missed learning opportunity.
+REMEMBER: rationale MUST be 10+ chars for BUY/SELL, conviction ranges 0.0-1.0.
+A HOLD with idle cash is a missed learning opportunity.
 """.strip()
 
     return injected
