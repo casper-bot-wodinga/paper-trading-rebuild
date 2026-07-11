@@ -696,6 +696,26 @@ def run_once(
         by_source["virtual"], by_source["live"], len(tasks),
     )
 
+    # ── Learning loop: run post-tick analysis for base traders ─────
+    try:
+        from src.learning_loop import run_for_agent, get_agents
+        agents = get_agents()
+        learning_results = []
+        for agent_id in agents:
+            try:
+                lr = run_for_agent(agent_id)
+                learning_results.append(lr)
+                log.info("Learning loop: %s — %d trades, $%.2f P&L, %.0f%% WR — %d signals",
+                         agent_id, lr["trades_count"], lr["total_pnl"],
+                         lr["win_rate"], len(lr["signals"]))
+            except Exception as e:
+                log.warning("Learning loop failed for %s: %s", agent_id, e)
+        summary["learning_loop"] = learning_results
+    except ImportError:
+        log.debug("Learning loop module not available — skipping post-tick analysis")
+    except Exception as e:
+        log.warning("Learning loop cycle failed: %s", e)
+
     return summary
 
 
