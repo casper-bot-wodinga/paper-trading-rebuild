@@ -1,0 +1,4 @@
+  File "/home/openclaw/projects/paper-trading-rebuild/src/data_bus.py", line 5700
+    def calendar_endpoin       symbols_found.append(symbol)\n            total_count += len(records)\n\n    return jsonify({\n        \"symbols\": result,\n        \"count\": total_count,\n        \"symbols_found\": symbols_found,\n        \"symbols_requested\": symbols,\n        \"source\": f\"parquet:{bars_dir}\",\n        \"interval\": interval,\n    })\n\n\n@app.route('/calendar')\ndef calendar_endpoint():"
+                               ^^^^^^^^^^^^^
+SyntaxError: expected '('

@@ -1,0 +1,9 @@
+{
+  "bars_endpoint_in_databus": true,
+  "api_findings_in_leaderboard": true,
+  "historical_sim_exists": true,
+  "bar_loader_has_databus_method": true,
+  "data_bus_responding": false,
+  "bars_endpoint_responding": false,
+  "bars_error": "<urlopen error [Errno 111] Connection refused>"
+}

@@ -1,0 +1,47 @@
+[2026-07-12 01:27:34] === Learning loop started for traders: trader-kairos ===
+[2026-07-12 01:27:34] --- Running learning loop for trader: trader-kairos ---
+
+============================================================
+📊 Learning Loop — trader-kairos
+============================================================
+  Decisions: 13
+  Trades:    9
+  Journal:   17
+
+  🔍 Journal Analysis...
+    • [REGIME_WEAKNESS] 'unknown' regime has win rate of 22% (9 trades, total P&L: $59). This represents 100% of all trades....
+
+  📈 Decision Analysis...
+    BUY: 9  SELL: 2  HOLD: 2
+    Avg confidence: 0.53
+    High-conviction trades: 4
+      • BUY NVDA (conf:0.75) — momentum_breakout, volume_surge, macd_bullish_crossover
+      • SELL NVDA (conf:0.70) — profit_target, rsi_overbought, volume_decline
+      • BUY NVDA (conf:0.75) — momentum_breakout, volume_surge, macd_bullish_crossover
+    Low-conviction trades: 5
+    Worst-performing signal categories:
+      • momentum_breakout: appeared in 3 low-conviction decisions
+      • volume_surge: appeared in 3 low-conviction decisions
+      • macd_bullish: appeared in 3 low-conviction decisions
+
+  💰 P&L Analysis...
+    Total P&L: $59.22
+    Win rate:  22.2% (2W / 5L)
+    Best:      NVDA $102.80
+    Worst:     AVGO $-58.40
+
+  🧬 Synthesis...
+    Promotions: 1
+      • {'action': 'NEEDS_VALIDATION', 'eligible': False, 'reason': 'Confidence 0.95 or 0 nights sustained — needs more data/validation.', 'suggestion': 'Reduce position size or skip trades entirely in unknown regime. Consider setting weight_unknown to 0.0 to deactivate trading in this regime.', 'insight': {'category': 'REGIME_WEAKNESS', 'description': "'unknown' regime has win rate of 22% (9 trades, total P&L: $59). This represents 100% of all trades.", 'suggestion': 'Reduce position size or skip trades entirely in unknown regime. Consider setting weight_unknown to 0.0 to deactivate trading in this regime.', 'confidence': 0.95, 'evidence': ['Regime unknown: 9 trades, win rate 22%, total P&L $59'], 'night': 0, 'source': 'heuristic'}, 'trader': 'trader-kairos'}
+
+  📝 Learning Signals...
+    ⚠️  LOW WIN RATE — Review entry criteria. Consider tightening signal filters.
+
+============================================================
+✅ Learning loop complete (0.0s)
+  trader-kairos: 9 trades, $59.22 P&L, 22% win rate — 1 learning signals
+
+[2026-07-12 01:27:34] ✓ trader-kairos: completed successfully (0s)
+[2026-07-12 01:27:34] === Learning loop finished ===
+[2026-07-12 01:27:34] Results: 1 succeeded, 0 failed
+[2026-07-12 01:27:34] All traders completed successfully.

@@ -102,6 +102,7 @@ class SweepReport:
     best_variant_id: str = ""
     best_params: Dict[str, float] = field(default_factory=dict)
     results: List[ScenarioResult] = field(default_factory=list)
+    learning_loop_result: Dict[str, Any] = field(default_factory=dict)
 
 
 # ── Simulation Runner ─────────────────────────────────────────────────────────
@@ -403,6 +404,26 @@ class SimulationRunner:
 
         # Sort by score descending
         report.results.sort(key=lambda r: r.objective_score, reverse=True)
+
+        # ── Learning loop: run_for_agent after sweep ──────────────
+        # Analyzes agent decisions/trades/journal from trader.db and produces
+        # learning signals, win rate trends, and confidence calibration insights.
+        # Lazy import to avoid circular dependency (learning_loop imports simulator).
+        try:
+            from src.learning_loop import run_for_agent
+            agent_id = f"trader-{config.trader}"
+            ll_result = run_for_agent(agent_id)
+            report.learning_loop_result = ll_result
+            log.info(
+                "Learning loop: %s — %d trades, $%.2f P&L, %.0f%% WR — %d signals",
+                agent_id, ll_result.get("trades_count", 0),
+                ll_result.get("total_pnl", 0),
+                ll_result.get("win_rate", 0),
+                len(ll_result.get("signals", [])),
+            )
+        except Exception as e:
+            log.warning("Learning loop post-sweep failed: %s", e)
+            report.learning_loop_result = {"status": "error", "error": str(e)}
 
         return report
 
@@ -743,7 +764,37 @@ def _cmd_sweep(args):
         print(formatted)
 
         # Write nightly summary to file
-        _write_nightly_summary(formatted)
+        _write_nightly_summary(formatted, all_reports=all_reports)
+
+    # ── Learning loop summary ──────────────────────────────────────
+    # Each SweepReport carries learning_loop_result from run_for_agent() called
+    # inside run_sweep(). Print a concise summary here.
+    print(f"\n{'='*60}")
+    print(f"  📚 LEARNING LOOP RESULTS")
+    print(f"{'='*60}")
+    has_learning_data = False
+    for report in all_reports:
+        ll = report.learning_loop_result or {}
+        if ll.get("status") == "error":
+            print(f"  ❌ {report.trader}: learning loop error — {ll.get('error', 'unknown')}")
+            continue
+        if ll.get("trades_count", 0) > 0 or ll.get("decisions_count", 0) > 0:
+            has_learning_data = True
+            signals = ll.get("signals", [])
+            print(f"\n  📊 {report.trader}:")
+            print(f"     Decisions: {ll.get('decisions_count', 0)}")
+            print(f"     Trades:    {ll.get('trades_count', 0)}")
+            print(f"     Win rate:  {ll.get('win_rate', 0):.1f}%")
+            print(f"     Total P&L: ${ll.get('total_pnl', 0):.2f}")
+            if signals:
+                print(f"     Learning signals:")
+                for s in signals:
+                    print(f"       {s}")
+        else:
+            print(f"  ℹ️  {report.trader}: no learning data in DB (run with --inject-test-data first)")
+    if not has_learning_data:
+        print(f"  ℹ️  No trader has learning data yet. Seed the DB via learning loop CLI or --inject-test-data.")
+    print()
 
     if getattr(args, 'json', False):
         print(json.dumps([
@@ -753,6 +804,13 @@ def _cmd_sweep(args):
                 "best_score": round(r.best_score, 4),
                 "best_variant": r.best_variant_id,
                 "best_params": r.best_params,
+                "learning_loop": {
+                    "decisions": (r.learning_loop_result or {}).get("decisions_count", 0),
+                    "trades": (r.learning_loop_result or {}).get("trades_count", 0),
+                    "win_rate": round((r.learning_loop_result or {}).get("win_rate", 0), 1),
+                    "total_pnl": round((r.learning_loop_result or {}).get("total_pnl", 0), 2),
+                    "signals": (r.learning_loop_result or {}).get("signals", []),
+                } if (r.learning_loop_result or {}).get("status") != "error" else {"status": "error"},
                 "top5": [
                     {"variant": s.variant_id, "score": round(s.objective_score, 4),
                      "pnl": round(s.replay_result.total_pnl, 2),
@@ -823,12 +881,17 @@ def _cmd_analyze(args):
     print(f"\n{summary.format()}")
 
 
-def _write_nightly_summary(formatted: str, output_dir: Optional[str] = None) -> str:
+def _write_nightly_summary(
+    formatted: str,
+    output_dir: Optional[str] = None,
+    all_reports: Optional[List[SweepReport]] = None,
+) -> str:
     """Write the nightly summary to a markdown file.
 
     Args:
         formatted: Markdown-formatted summary string.
         output_dir: Optional output directory (default: .hermes/reports/).
+        all_reports: Optional sweep reports to include learning loop results.
 
     Returns:
         Path to the written file.
@@ -841,9 +904,37 @@ def _write_nightly_summary(formatted: str, output_dir: Optional[str] = None) -> 
     filename = f"nightly_summary_{date_str}.md"
     filepath = os.path.join(output_dir, filename)
 
+    lines = [formatted]
+
+    # Append learning loop results if available
+    if all_reports:
+        lines.append("")
+        lines.append("## 📚 Learning Loop Results")
+        lines.append("")
+        lines.append("| Trader | Decisions | Trades | Win Rate | Total P&L | Signals |")
+        lines.append("|--------|-----------|--------|----------|-----------|---------|")
+        for report in all_reports:
+            ll = report.learning_loop_result or {}
+            if ll.get("status") == "ok" and ll.get("trades_count", 0) > 0:
+                signals_str = "; ".join(ll.get("signals", []))
+                lines.append(
+                    f"| {report.trader} | {ll.get('decisions_count', 0)} | "
+                    f"{ll.get('trades_count', 0)} | "
+                    f"{ll.get('win_rate', 0):.1f}% | "
+                    f"${ll.get('total_pnl', 0):.2f} | "
+                    f"{signals_str[:80] if signals_str else 'none'} |"
+                )
+            else:
+                lines.append(
+                    f"| {report.trader} | — | — | — | — | no data |"
+                )
+        lines.append("")
+
+    lines.append(f"---")
+    lines.append(f"Generated at {datetime.now().isoformat()}")
+
     with open(filepath, "w") as f:
-        f.write(formatted)
-        f.write(f"\n\n---\nGenerated at {datetime.now().isoformat()}\n")
+        f.write("\n".join(lines))
 
     log.info("Nightly summary written to %s", filepath)
     return filepath

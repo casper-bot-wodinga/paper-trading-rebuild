@@ -1436,6 +1436,68 @@ td{{border-bottom:1px solid var(--surface2)}}
 </html>"""
 
 
+# ── API: /api/findings ────────────────────────────────────────────────────
+
+@app.route("/api/findings")
+def api_findings():
+    """Returns historical sim findings — sweep results from shared/trader.db.
+
+    Query parameters:
+        trader: Filter by trader name (optional).
+        limit: Max results (default 20).
+
+    Returns:
+        JSON list of sweep result dicts with performance metrics.
+    """
+    trader = request.args.get("trader", "")
+    limit = int(request.args.get("limit", 20))
+
+    results = []
+    try:
+        import sqlite3
+        db_path = ROOT / "shared" / "trader.db"
+        if not db_path.exists():
+            return jsonify({"findings": [], "count": 0, "db_path": str(db_path), "error": "no db file"})
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # Check if sweep_results table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sweep_results'")
+        if not cur.fetchone():
+            conn.close()
+            return jsonify({"findings": [], "count": 0, "status": "no_sweep_results_table"})
+
+        query = "SELECT * FROM sweep_results"
+        params = []
+        if trader:
+            query += " WHERE trader = ?"
+            params.append(trader)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        rows = cur.execute(query, params).fetchall()
+        for r in rows:
+            d = dict(r)
+            # Parse params JSON if present
+            if d.get("params"):
+                try:
+                    d["params"] = json.loads(d["params"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            results.append(d)
+        conn.close()
+    except Exception as e:
+        return jsonify({"findings": [], "count": 0, "error": str(e)})
+
+    return jsonify({
+        "findings": results,
+        "count": len(results),
+        "trader_filter": trader or "all",
+    })
+
+
 # ── static frontend ───────────────────────────────────────────────────────────
 
 @app.route("/")

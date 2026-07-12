@@ -50,11 +50,21 @@ trap cleanup EXIT
 
 # ── Determine traders to process ─────────────────────────────────────────────
 if [ $# -gt 0 ]; then
-    # Specific trader(s) passed on command line
-    TRADERS=("$@")
+    # Specific trader(s) passed on command line — map short names to full agent IDs
+    # Supported short names: kairos, aldridge, stonks
+    TRADERS=()
+    for name in "$@"; do
+        case "$name" in
+            kairos)   TRADERS+=("trader-kairos") ;;
+            aldridge) TRADERS+=("trader-aldridge") ;;
+            stonks)   TRADERS+=("trader-stonks") ;;
+            trader-*) TRADERS+=("$name") ;;
+            *)        log_error "Unknown trader: $name (expected: kairos, aldridge, stonks)" ;;
+        esac
+    done
 else
     # Default: all three paper traders
-    TRADERS=("kairos" "aldridge" "stonks")
+    TRADERS=("trader-kairos" "trader-aldridge" "trader-stonks")
 fi
 
 # ── Run learning loop for each trader ────────────────────────────────────────
