@@ -1,0 +1,9 @@
+{
+  "cycle": 471,
+  "timestamp": "2026-07-12T05:13:59.193857+00:00",
+  "total": 21,
+  "online": 9,
+  "degraded": 1,
+  "offline": 11,
+  "health_pct": 42.9
+}
