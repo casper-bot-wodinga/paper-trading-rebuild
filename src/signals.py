@@ -77,7 +77,7 @@ class SignalParams:
     bollinger_std: float = 2.0             # [1.0, 3.0]
 
     # Volume
-    volume_threshold: float = 1.2          # [0.5, 3.0]  min volume / 20d avg volume
+    volume_threshold: float = 0.6          # [0.3, 3.0]  min volume / 20d avg volume -- relaxed for fear environments
 
     # Volatility
     vol_regime_threshold: float = 0.25     # [0.1, 0.5]
@@ -108,7 +108,7 @@ class SignalParams:
         "rsi_oversold": ParamBound(30.0, 15.0, 40.0),
         "rsi_overbought": ParamBound(70.0, 60.0, 85.0),
         "bollinger_std": ParamBound(2.0, 1.0, 3.0),
-        "volume_threshold": ParamBound(1.2, 0.5, 3.0),
+        "volume_threshold": ParamBound(0.6, 0.3, 3.0),
         "vol_regime_threshold": ParamBound(0.25, 0.1, 0.5),
         "vol_reduction_multiplier": ParamBound(0.7, 0.3, 1.0),
         "base_size_pct": ParamBound(0.15, 0.05, 0.30),
@@ -420,16 +420,13 @@ class SignalEngine:
         volume_ratio = self._compute_volume_ratio(volumes)
         volume_pass = volume_ratio >= p.volume_threshold if volume_ratio is not None else True
 
-        # CHOPPY + Extreme Fear bypass: per Kairos prompt rules, CHOPPY regime
-        # (mapped to MEAN_REVERTING) with Fear & Greed ≤ 30 indicates market
-        # capitulation — this is opportunity, not threat. Relax volume filter
-        # so traders can buy oversold quality stocks.
-        if (
-            regime == "MEAN_REVERTING"
-            and fear_greed is not None
-            and fear_greed <= 30.0
-        ):
-            volume_pass = True  # Bypass volume filter in CHOPPY + Extreme Fear
+        # Bootstrap / Extreme Fear bypass:
+        # (1) Extreme Fear (F&G ≤ 30) — market capitulation, opportunity not threat.
+        #     Bypass volume filter across ALL regimes so traders can act.
+        # (2) Bootstrap mode — when F&G ≤ 35, relax filter; traders need to
+        #     build positions through fear environments.
+        if fear_greed is not None and fear_greed <= 30.0:
+            volume_pass = True  # Extreme Fear: bypass volume filter across all regimes
 
         # ── Risk ──────────────────────────────────────────────────────
         stop_loss = price * (1 - p.stop_loss_pct)

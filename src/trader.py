@@ -266,7 +266,10 @@ class Trader:
 
         # 1. Signal engine: compute indicators
         try:
-            signal: SignalReport = self.signal_engine.process(tick)
+            # Pass bootstrap=True when no positions open — this bypasses
+            # volume filter so traders can build initial positions.
+            bootstrap = len(self.state.positions) == 0
+            signal: SignalReport = self.signal_engine.process(tick, bootstrap=bootstrap)
         except Exception as exc:
             log.error("[%s] Signal engine failed for %s: %s", self.trader_id, ticker, exc)
             alert.p1(

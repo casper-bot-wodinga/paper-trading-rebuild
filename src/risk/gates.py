@@ -15,6 +15,7 @@ All gates are stateless — no DB reads, no side effects, no network calls.
 """
 
 from datetime import datetime, timedelta
+import os
 from typing import Dict, Any, Tuple, Optional, List
 
 

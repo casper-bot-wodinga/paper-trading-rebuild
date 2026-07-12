@@ -29,10 +29,11 @@ KAIROS_DEFAULTS = AgentFiles(
         "and RSI is not overbought (<70). Sell when momentum turns negative "
         "or RSI exceeds 80. Hold otherwise.\n\n"
         "## Rules\n"
-        "- Volume filter: only enter when volume ≥ 1.2x 20-day average — don't miss entries waiting for volume perfection\n"
+        "- Volume filter: only enter when volume ≥ 0.6x 20-day average (relaxed during fear)\n"
         "- Never exceed 20% of portfolio in one position\n"
         "- Journal every decision with conviction and rationale\n"
-        "- If uncertain (conviction < 0.3), default to HOLD"
+        "- Fear & Greed ≤ 30 is a contrarian BUY signal — act, don't freeze\n"
+        "- Conviction ≥ 0.15 is enough for a small probe trade; certainty isn't required"
     ),
     soul=(
         "You are confident and swift. You trust the numbers. "
@@ -301,5 +302,14 @@ class PromptBuilder:
             f"## Current Market Data\n{signal_text}\n\n"
             f"## Portfolio\n{portfolio_text}\n\n"
             f"Make your decision. Respond with valid JSON only:\n"
-            f'{{"decision": "BUY|SELL|HOLD", "conviction": 0.0-1.0, "rationale": "one sentence"}}'
+            f'{{"action": "BUY|SELL|HOLD", '
+            f'"ticker": "SYMBOL or null if HOLD", '
+            f'"quantity": integer or null, '
+            f'"stop_loss": dollar amount or null, '
+            f'"confidence": float 0.0-1.0, '
+            f'"thesis": "WHY — 20+ chars describing signal, catalyst, edge", '
+            f'"signals_used": ["list", "of", "signal", "names"], '
+            f'"exit_condition": "how you plan to exit", '
+            f'"holding_horizon_days": integer, '
+            f'"reasoning": "1-2 sentence in-character thinking"}}'
         )

@@ -34,7 +34,7 @@ HMM regime-filtered momentum trading:
 **Key signals from your prompt:**
 - **Momentum**: Use RSI + MACD + volume ratio from the Watchlist Quotes table to gauge momentum
 - **Regime gate**: SUSTAINABLE = full entry (>0.75 confidence) or half-size (0.50-0.75). CHOPPY = half-size entry OK with tight stops. EXHAUSTED = no buys.
-- **Fear/Greed overlay**: F&G value is in your Market Context. Low greed = contrarian buy signal.
+- **Fear/Greed overlay**: F&G value is in your Market Context. F&G ≤ 30 is a contrarian BUY signal — act, don't freeze. The volume filter is relaxed during extreme fear.
 - **Portfolio check**: Your open positions and P&L are pre-assembled — evaluate concentration, sector exposure, and aging positions from the portfolio section.
 
 ## Output Format
@@ -56,7 +56,9 @@ Respond ONLY with valid JSON. No prose outside the JSON.
 }
 ```
 
-IMPORTANT: Every BUY must include ALL fields above. The risk gate will reject sparse decisions that lack thesis, signals_used, or exit conditions. Minimum thesis length: 20 characters. Minimum signals_used: at least 1 entry.
+IMPORTANT: Every BUY must include ALL fields above. The risk gate will reject sparse decisions that lack thesis, signals_used, or exit conditions. Minimum thesis length: 10 characters. Minimum signals_used: at least 1 entry.
+
+**During Extreme Fear (F&G ≤ 30)**: Risk gates relax. You DO NOT need 3/3 confirmations. A single signal trigger (momentum > 0.5 OR RSI oversold OR strong volume) is enough for a small probe. Fear creates opportunity — don't freeze.
 
 ## Model Tier System
 

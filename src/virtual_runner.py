@@ -55,7 +55,7 @@ log = logging.getLogger("virtual_runner")
 # ── Config (mutable dict — CLI args can override) ─────────────────────────────
 
 _config: Dict[str, Any] = {
-    "db_dsn": os.getenv("VT_DB_DSN", "host=192.168.1.25 port=5433 dbname=trading user=trader"),
+    "db_dsn": os.getenv("VT_DB_DSN", "host=192.168.1.179 port=5433 dbname=trading user=trader"),
     "data_bus_url": os.getenv("VT_DATA_BUS_URL", "http://192.168.1.25:5000"),
     "model": os.getenv("VT_MODEL", "google/gemini-3.5-flash"),
     "interval": 300,  # seconds (5 min)
@@ -462,7 +462,10 @@ def pick_best_ticker(
 
     for tick in ticks:
         try:
-            signal = signal_engine.process(tick)
+            # Bootstrap: virtual runner starts fresh every cycle,
+            # so volume filter bypass helps make initial entries.
+            bootstrap = len(get_portfolio(trader_name).positions) == 0 if trader_name else True
+            signal = signal_engine.process(tick, bootstrap=bootstrap)
             abs_score = abs(signal.composite_signal)
             if abs_score > best_abs_score:
                 best_abs_score = abs_score
@@ -499,7 +502,7 @@ def run_one_trader(
     """
     # Compute signals
     signal_params = build_signal_params(base_trader, config)
-    best_ticker, best_signal = pick_best_ticker(ticks, signal_params)
+    best_ticker, best_signal = pick_best_ticker(ticks, signal_params, trader_name=trader_name)
 
     if best_ticker is None or best_signal is None:
         log.debug("  %-24s no signal", trader_name)

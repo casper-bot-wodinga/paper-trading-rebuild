@@ -25,6 +25,7 @@ from src.risk.gates import (
     PDTGate,
     HoursGate,
     ConvictionGate,
+    BootstrapGate,
 )
 
 
@@ -80,6 +81,7 @@ class RiskManager:
         pdt_day_trade_limit = int(spec_risk.get("pdt_day_trade_limit", 3))
 
         return [
+            BootstrapGate(),
             CashGate(),
             HoursGate(),
             ConvictionGate(min_conviction=float(spec_risk.get("require_conviction", 0.3))),
