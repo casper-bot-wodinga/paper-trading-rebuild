@@ -180,10 +180,10 @@ def bars_to_ticks(df: pd.DataFrame) -> List[Tick]:
         if isinstance(ts, pd.Timestamp):
             ts = ts.to_pydatetime()
 
-        # For daily/EOD bars (timestamps outside market hours), shift to market hours
+        # Filter to US market hours (9:30 AM - 4:00 PM ET = 13:30-20:00 UTC)
+        # Bars exactly at 20:00 UTC (4 PM ET close) are included.
         hour = ts.hour + ts.minute / 60.0
-        if hour < 13.5 or hour >= 20.0:
-            # EOD bar — skip intraday, use one per day
+        if hour < 13.5 or hour > 20.0:
             continue
 
         open_price = float(row["open"])
@@ -250,6 +250,7 @@ def _get_daily_bars(df: pd.DataFrame) -> pd.DataFrame:
     ).copy()
     last = deduped.groupby(["symbol", "day"], as_index=False).last()
     last["timestamp"] = pd.to_datetime(last["day"].astype(str)) + pd.Timedelta(hours=20)
+    last["timestamp"] = last["timestamp"].dt.tz_localize("UTC")
     last = last.drop(columns=["day"])
     last = last.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
     return last
@@ -282,35 +283,57 @@ class MultiTickerSignalEngine:
 # Trader
 # ==============================================================================
 
-def make_signal_trader(params: SignalParams) -> TraderFn:
+def make_signal_trader(params: SignalParams, ticks: List[Tick]) -> TraderFn:
     """Signal-only trader with per-ticker engine isolation.
 
     FIXES: SL=1%/TP=3%, single conviction gate at 0.2, history=3+d.
+    Closes all positions on the last trading day (forced exit).
     """
     engine = MultiTickerSignalEngine(params=params)
     MIN_CONVICTION = 0.20
 
+    # Find last date in data for forced exit
+    last_date = max(t.timestamp.date() for t in ticks) if ticks else None
+
     def trader_fn(tick: Tick, portfolio: Portfolio) -> TraderDecision:
         report = engine.process(tick)
+        is_last_day = last_date and tick.timestamp.date() == last_date
+        pos = portfolio.positions.get(tick.ticker)
 
-        # Exit held positions via SL/TP
-        if tick.ticker in portfolio.positions:
-            pos = portfolio.positions[tick.ticker]
+        # Exit held positions
+        if pos:
+            # Forced exit on last day (close all positions)
+            if is_last_day:
+                return TraderDecision(
+                    ticker=tick.ticker, decision="SELL",
+                    conviction=report.conviction,
+                    rationale=f"EOD close at {tick.close:.2f}",
+                    shares=pos.shares, signal_override=True)
+
+            # SL/TP exits
             if tick.close <= report.stop_loss:
                 return TraderDecision(
-                    ticker=tick.ticker, decision="SELL", conviction=report.conviction,
-                    rationale=f"SL at {tick.close:.2f}", shares=pos.shares,
-                    signal_override=True)
+                    ticker=tick.ticker, decision="SELL",
+                    conviction=report.conviction,
+                    rationale=f"SL at {tick.close:.2f}",
+                    shares=pos.shares, signal_override=True)
             if tick.close >= report.take_profit:
                 return TraderDecision(
-                    ticker=tick.ticker, decision="SELL", conviction=report.conviction,
-                    rationale=f"TP at {tick.close:.2f}", shares=pos.shares,
-                    signal_override=True)
+                    ticker=tick.ticker, decision="SELL",
+                    conviction=report.conviction,
+                    rationale=f"TP at {tick.close:.2f}",
+                    shares=pos.shares, signal_override=True)
             return TraderDecision(
                 ticker=tick.ticker, decision="HOLD", conviction=0.0,
                 rationale="Held")
 
-        # Entry on BULLISH momentum + conviction gate
+        # Don't enter on last day (would close immediately for 0 P&L)
+        if is_last_day:
+            return TraderDecision(
+                ticker=tick.ticker, decision="HOLD", conviction=0.0,
+                rationale="Last day, no entry")
+
+        # Entry on BULLISH momentum
         if (report.momentum_signal == "BULLISH"
                 and report.conviction >= MIN_CONVICTION
                 and portfolio.position_count < report.max_positions):
@@ -363,7 +386,7 @@ def score_variant(params: SignalParams, ticks: List[Tick]) -> Tuple[float, Any]:
         max_position_pct=params.base_size_pct,
         require_conviction=0.20,
     )
-    trader_fn = make_signal_trader(params)
+    trader_fn = make_signal_trader(params, ticks)
     result = harness.run(ticks, trader_fn)
     trade_pnls = [t.pnl for t in result.trades]
     score = objective_score(result.returns, result.equity_curve, trade_pnls)
