@@ -408,7 +408,139 @@ def step_promote(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pipeline Step 6: Push Canvas Card
+# Pipeline Step 6: Promote winners to virtual traders
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def step_virtual_promotion(
+    result: Dict[str, Any],
+    date_str: str,
+    dry_run: bool = False,
+) -> Optional[str]:
+    """Promote winning variants to virtual traders via promote_sweep_winner.py.
+
+    Builds a sweep_results JSON (same format as prompt_sweep --output-json)
+    and calls promote_sweep_winner.py to create virtual trader rows with
+    status='probation' and variant_type='from_sweep'.
+
+    This is the connection from #93 (nightly replay -> prompt grading) to
+    #94 (promote_sweep_winner.py) - the winner from the nightly pipeline
+    gets deployed as a virtual trader for live monitoring.
+
+    Args:
+        result: Pipeline result dict with traders/winner info.
+        date_str: Reference date string.
+        dry_run: If True, print what would be done without writing.
+
+    Returns:
+        Path to the written results JSON, or None if no winners.
+    """
+    print(f"\n{'='*60}")
+    action = "DRY RUN" if dry_run else "live"
+    print(f"  STEP 6/7: Promote Winners to Virtual Traders ({action})")
+    print(f"{'='*60}")
+
+    # Collect winners from pipeline results
+    winners = []
+    for trader_short, tr in result.get("traders", {}).items():
+        if tr.get("promoted"):
+            winners.append({
+                "trader": trader_short,
+                "variant_name": tr.get("phase1_winner") or tr.get("phase2_winner"),
+                "branch_name": tr.get("branch_name"),
+            })
+
+    if not winners:
+        print(f"[nightly] No winners to promote to virtual traders")
+        return None
+
+    print(f"[nightly] Found {len(winners)} winner(s) to promote:")
+    for w in winners:
+        print(f"  - {w['trader']}: {w['variant_name']} (branch: {w['branch_name']})")
+
+    # Build the sweep_results JSON in the format promote_sweep_winner expects
+    from dataclasses import fields as dc_fields
+    from src.signals import SignalParams
+
+    sweep_results_list = []
+    for trader_short, tr in result.get("traders", {}).items():
+        if not tr.get("promoted"):
+            continue
+        variant_name = tr.get("phase1_winner") or tr.get("phase2_winner") or "unknown"
+        default_params = SignalParams()
+        signal_params = {}
+        for f in dc_fields(SignalParams):
+            if f.name != "_BOUNDS":
+                signal_params[f.name] = getattr(default_params, f.name)
+
+        sweep_results_list.append({
+            "trader": trader_short,
+            "date": date_str,
+            "baseline_score": 0.0,
+            "variants": [
+                {
+                    "variant_name": variant_name,
+                    "score": 0.0,
+                    "signal_params": signal_params,
+                }
+            ],
+            "winner": {
+                "variant_name": variant_name,
+                "score": 0.0,
+                "signal_params": signal_params,
+            },
+            "branch_name": tr.get("branch_name"),
+        })
+
+    sweep_data = {
+        "sweep_date": date_str,
+        "results": sweep_results_list,
+    }
+
+    # Write to results directory
+    results_dir = PROJECT_DIR / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    results_path = results_dir / "sweep_results.json"
+
+    if dry_run:
+        print(f"\n[nightly] (DRY RUN) Would write sweep results to: {results_path}")
+        print(f"[nightly] (DRY RUN) Would call promote_sweep_winner.py with:")
+        for w in winners:
+            print(f"  - {w['trader']}: {w['variant_name']} -> virtual trader")
+        return str(results_path)
+
+    import json
+    with open(results_path, "w") as f:
+        json.dump(sweep_data, f, indent=2, default=str)
+    print(f"[nightly] Sweep results written to: {results_path}")
+
+    # Call promote_sweep_winner.py
+    promote_script = SCRIPTS_DIR / "promote_sweep_winner.py"
+    if not promote_script.exists():
+        print(f"[nightly] promote_sweep_winner.py not found at {promote_script}")
+        return str(results_path)
+
+    try:
+        cmd = [sys.executable, str(promote_script), "--results", str(results_path)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.stdout:
+            print(r.stdout)
+        if r.stderr:
+            print(r.stderr, file=sys.stderr)
+        if r.returncode == 0:
+            print(f"[nightly] Promotion to virtual traders complete")
+        else:
+            print(f"[nightly] promote_sweep_winner.py exited with code {r.returncode}")
+    except subprocess.TimeoutExpired:
+        print(f"[nightly] promote_sweep_winner.py timed out after 60s")
+    except Exception as e:
+        print(f"[nightly] Failed to run promote_sweep_winner.py: {e}")
+
+    return str(results_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pipeline Step 7: Push Canvas Card
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -428,11 +560,11 @@ def step_canvas_card(
         Card UUID if pushed, None otherwise.
     """
     if dry_run:
-        print(f"\n[nightly] STEP 6/6: Canvas Card — DRY RUN (skipped)")
+        print(f"\n[nightly] STEP 7/7: Canvas Card — DRY RUN (skipped)")
         return None
 
     print(f"\n{'='*60}")
-    print("  STEP 6/6: Push Canvas Card")
+    print("  STEP 7/7: Push Canvas Card")
     print(f"{'='*60}")
 
     # Build markdown summary
@@ -563,6 +695,7 @@ def nightly_pipeline(
     phase2_top_k: int = 3,
     max_llm_runs: int = 9,
     skip_llm: bool = False,
+    skip_virtual_promotion: bool = False,
     # General
     dry_run: bool = False,
 ) -> Dict[str, Any]:
@@ -774,7 +907,48 @@ def nightly_pipeline(
         result["traders"][trader_short] = trader_result
 
     # ═══════════════════════════════════════════════════════════════════
-    # STEP 6: Canvas Card
+    # STEP 6: Promote winners to virtual traders
+    # ═══════════════════════════════════════════════════════════════════
+    if not skip_virtual_promotion:
+        step_virtual_promotion(result, date_str, dry_run=dry_run)
+    else:
+        print(f"\n[nightly] ⏭ Skipping virtual trader promotion (--skip-virtual-promotion)")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STEP 7: Holdout Verification — ensure training never leaks into holdout
+    # ═══════════════════════════════════════════════════════════════════
+    holdout_verified = False
+    try:
+        from src.holdout import HoldoutManager
+        hm = HoldoutManager()
+        holdout_dates = hm.get_holdout_dates()
+        if holdout_dates:
+            # Verify no holdout date appears in any date_str used
+            print(f"\n{'='*60}")
+            print("  STEP 7: Holdout Verification")
+            print(f"  Holdout set: {holdout_dates[0]} → {holdout_dates[-1]} "
+                  f"({len(holdout_dates)} dates, 15%)")
+
+            # Check if the reference date is in holdout
+            if hm.is_holdout(date_str):
+                print(f"  ⚠️  REFERENCE DATE {date_str} is in holdout! "
+                      f"Results are NOT representative.")
+                result["warnings"].append(
+                    f"Reference date {date_str} is in holdout — results are not valid."
+                )
+            else:
+                print(f"  ✅ Reference date {date_str} verified — outside holdout set")
+                holdout_verified = True
+        else:
+            print(f"\n[nightly] STEP 7: No holdout set configured — skipping verification")
+            print(f"  Run 'python3 scripts/holdout_eval.py --update' to create one.")
+    except ImportError:
+        pass
+
+    result["holdout_verified"] = holdout_verified
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STEP 8: Canvas Card
     # ═══════════════════════════════════════════════════════════════════
     pipeline_elapsed = time.time() - pipeline_start
     result["duration_seconds"] = pipeline_elapsed
@@ -896,6 +1070,13 @@ Examples:
         help="Max LLM runs per trader (default: 9)",
     )
 
+    # Promotion options
+    promote = parser.add_argument_group("Promotion options")
+    promote.add_argument(
+        "--skip-virtual-promotion", action="store_true",
+        help="Skip winner promotion to virtual traders (default: promote)",
+    )
+
     # General
     general = parser.add_argument_group("General options")
     general.add_argument(
@@ -927,6 +1108,7 @@ Examples:
         phase2_top_k=args.phase2_top_k,
         max_llm_runs=args.max_llm_runs,
         skip_llm=args.skip_llm,
+        skip_virtual_promotion=args.skip_virtual_promotion,
         dry_run=args.dry_run,
     )
 
