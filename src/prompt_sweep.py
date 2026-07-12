@@ -12,17 +12,20 @@ Usage:
     python3 src/prompt_sweep.py --variants 10                  # more variants
     python3 src/prompt_sweep.py --date 2026-07-03              # specific date
     python3 src/prompt_sweep.py --dry-run                      # score only, no git
+    python3 src/prompt_sweep.py --no-deploy                    # skip virtual_trader DB deploy
+    python3 src/prompt_sweep.py --dry-run --no-deploy          # full dry-run, skip everything
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -1170,6 +1173,81 @@ def run_sweep(
     return results
 
 
+# ── Post-sweep bridge: deploy winners to virtual_traders DB ──────────────
+
+def deploy_winner_to_virtual_traders(
+    sweep_result: SweepResult,
+    dry_run: bool = False,
+) -> None:
+    """Deploy a winning sweep variant as a new virtual trader (status=probation).
+
+    Takes a SweepResult with a winner, extracts the variant's signal params,
+    and creates a new row in trading.virtual_traders with variant_type='from_sweep'
+    so the virtual runner can pick it up on the next cycle.
+
+    Args:
+        sweep_result: The result from a prompt sweep run.
+        dry_run: If True, log what would be done but do not execute.
+    """
+    winner = sweep_result.winner
+    if winner is None:
+        print(f"  No winner for {sweep_result.trader} — skipping virtual_trader deploy")
+        return
+
+    trader_short = winner.trader
+    variant_name = winner.variant_name
+    name = f"{trader_short}-sweep-{variant_name}"
+    config = winner.signal_params.to_dict()
+
+    if dry_run:
+        print(
+            f"  [DRY RUN] Would create virtual_trader: name={name}, base_trader={trader_short}, "
+            f"variant_type=from_sweep, config=({len(config)} params), status=probation"
+        )
+        return
+
+    # Connect to Postgres (same DSN convention as virtual_cull.py)
+    dsn = os.getenv("VT_DB_DSN", "host=docker.klo port=5433 dbname=trading user=trader")
+    try:
+        import psycopg2
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        # Skip if name already exists
+        cur.execute(
+            "SELECT id FROM trading.virtual_traders WHERE name = %s",
+            (name,),
+        )
+        if cur.fetchone():
+            print(f"  ⚠️  Virtual {name} already exists — skipping deploy")
+            conn.close()
+            return
+
+        cur.execute(
+            """INSERT INTO trading.virtual_traders
+               (name, base_trader, variant_type, config, status, created_at, wins)
+               VALUES (%s, %s, %s, %s::jsonb, %s, %s, 0)""",
+            (
+                name,
+                trader_short,
+                "from_sweep",
+                json.dumps(config),
+                "probation",
+                date.today(),
+            ),
+        )
+        conn.close()
+        print(
+            f"  ✅ Deployed {name} from sweep (variant='{variant_name}', "
+            f"type=from_sweep, status=probation, {len(config)} params)"
+        )
+    except ImportError:
+        print("  ❌ psycopg2 not available — cannot deploy to virtual_traders")
+    except Exception as e:
+        print(f"  ❌ Failed to deploy winner to virtual_traders: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Prompt Sweep — nightly variant generation, replay, ranking"
@@ -1196,8 +1274,10 @@ def main():
                         help="Top K variants to LLM validate (default: 3).")
     parser.add_argument("--phase2-budget", type=int, default=9,
                         help="Max LLM runs per trader (default: 9).")
+    parser.add_argument("--no-deploy", action="store_true",
+                        help="Skip deploying winner to virtual_traders DB.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Score only — skip git branch creation.")
+                        help="Score only — skip git branch creation and DB deploy.")
 
     args = parser.parse_args()
 
@@ -1229,6 +1309,21 @@ def main():
         if sr.branch_name:
             print(f"           branch: {sr.branch_name}")
     print()
+
+    # ── Deploy winners to virtual_traders ────────────────────────────────
+    if not args.no_deploy and not args.dry_run:
+        print("\n── Deploying winners to virtual_traders ──────────────────────")
+        for sr in results:
+            if sr.winner:
+                deploy_winner_to_virtual_traders(sr, dry_run=False)
+            else:
+                print(f"  {sr.trader}: no winner — skip")
+        print()
+    elif args.dry_run:
+        print("\n── (dry-run: skipping virtual_trader deploy) ────────────────")
+        for sr in results:
+            deploy_winner_to_virtual_traders(sr, dry_run=True)
+        print()
 
 
 if __name__ == "__main__":
