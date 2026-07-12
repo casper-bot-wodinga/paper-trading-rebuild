@@ -263,7 +263,7 @@ def _get_alpaca_portfolio(company: str) -> Optional[dict]:
 
 def _parse_decisions(company: str) -> list:
     """
-    Query decisions + orders from shared/trader.db.
+    Query decisions + orders from Postgres trading.decisions table.
     Returns a list of event dicts matching the old JSONL format.
     """
     events = []
@@ -325,11 +325,10 @@ def _get_benchmark_data() -> dict:
         with _db() as conn:
             if not conn:
                 return data
-            cur = conn.cursor()
 
-            # Latest prices
+            # Latest prices (use monkey-patched conn.execute for RealDictCursor)
             for ticker in ["SPY", "QQQ"]:
-                cur.execute(
+                cur = conn.execute(
                     "SELECT close_price FROM benchmarks WHERE ticker = %s ORDER BY date DESC LIMIT 1",
                     (ticker,),
                 )
@@ -339,7 +338,7 @@ def _get_benchmark_data() -> dict:
                     data[key] = {"price": round(float(row["close_price"]), 2)}
 
             # Agent benchmark comparisons
-            cur.execute(
+            cur = conn.execute(
                 """SELECT * FROM agent_benchmark_comparison
                    ORDER BY agent_id, period_start DESC"""
             )
@@ -428,22 +427,23 @@ def _get_trade_stats(company: str) -> dict:
             rows = conn.execute(
                 """SELECT action, COUNT(*) as cnt
                    FROM orders
-                   WHERE agent_id=%s AND status NOT IN ("error","rejected")
+                   WHERE agent_id=%s AND status NOT IN ('error','rejected')
                    GROUP BY action""",
                 (f"trader-{company}",),
             ).fetchall()
-            for action, cnt in rows:
-                result[action] = cnt
-            result["total_trades"] = result.get("BUY", 0) + result.get("SELL", 0)
+            for r in rows:
+                action_lower = r["action"].lower()
+                result[action_lower] = r["cnt"]
+            result["total_trades"] = result.get("buy", 0) + result.get("sell", 0)
 
             # Win/loss: compute directly from closed trades with PnL
             pnl_rows = conn.execute(
                 """SELECT pnl FROM trades
-                   WHERE agent_id = %s AND status = "closed" AND pnl IS NOT NULL""",
+                   WHERE agent_id = %s AND status = 'closed' AND pnl IS NOT NULL""",
                 (f"trader-{company}",),
             ).fetchall()
             if pnl_rows:
-                pnls = [r[0] for r in pnl_rows]
+                pnls = [r["pnl"] for r in pnl_rows]
                 result["wins"] = sum(1 for p in pnls if p > 0)
                 result["losses"] = sum(1 for p in pnls if p <= 0)
                 result["win_rate"] = round(result["wins"] / len(pnls), 4) if pnls else 0.0
@@ -454,9 +454,9 @@ def _get_trade_stats(company: str) -> dict:
                     "SELECT performance FROM agent_profile WHERE agent_id=%s",
                     (f"trader-{company}",),
                 ).fetchone()
-                if perf_row and perf_row[0]:
+                if perf_row and perf_row["performance"]:
                     try:
-                        perf = json.loads(perf_row[0])
+                        perf = json.loads(perf_row["performance"])
                         if isinstance(perf, str):
                             perf = json.loads(perf)
                     except (json.JSONDecodeError, TypeError):
@@ -473,10 +473,10 @@ def _get_last_activity(company: str) -> str | None:
     try:
         with _db() as conn:
             row = conn.execute(
-                "SELECT MAX(timestamp) FROM journal WHERE agent_id=%s",
+                "SELECT MAX(timestamp) as max_ts FROM journal WHERE agent_id=%s",
                 (f"trader-{company}",),
             ).fetchone()
-        return row[0] if row else None
+        return row["max_ts"] if row else None
     except Exception:
         return None
 
@@ -490,17 +490,17 @@ def _get_recent_thought(company: str) -> str | None:
                 (f"trader-{company}",),
             ).fetchone()
         if row:
-            mood = row[1] or ""
-            text = row[0] or ""
+            mood = row["mood"] or ""
+            text = row["entry"] or ""
             return f"{mood + ' — ' if mood else ''}{text}"
         return None
     except Exception:
         return None
 
 
-def _get_profile_from_sqlite(company: str) -> dict:
+def _get_profile_from_db(company: str) -> dict:
     """
-    Read trader personality/profile from the agent_profile table.
+    Read trader personality/profile from the Postgres agent_profile table.
     Returns a dict matching the fields expected by the /api/traders route.
     Returns empty dict on failure.
     """
@@ -563,7 +563,7 @@ def api_traders():
 
     for meta in TRADER_META:
         company  = meta["id"]
-        profile  = _get_profile_from_sqlite(company)
+        profile  = _get_profile_from_db(company)
         portfolio = _get_alpaca_portfolio(company)
 
         pv  = portfolio["portfolio_value"] if portfolio else None
@@ -784,7 +784,7 @@ def api_journal():
             try:
                 rows = conn.execute(
                     "SELECT agent_id, timestamp, mood, entry, confidence "
-                    "FROM journal ORDER BY timestamp DESC LIMIT ?",
+                    "FROM journal ORDER BY timestamp DESC LIMIT %s",
                     (limit,)
                 ).fetchall()
                 entries = [dict(r) for r in rows]
@@ -848,7 +848,7 @@ def api_signals():
             try:
                 rows = conn.execute(
                     "SELECT agent_id, timestamp, ticker, signal, confidence, regime "
-                    "FROM ml_signals ORDER BY timestamp DESC LIMIT ?",
+                    "FROM ml_signals ORDER BY timestamp DESC LIMIT %s",
                     (limit,)
                 ).fetchall()
                 signals = [dict(r) for r in rows]
@@ -1172,9 +1172,10 @@ def debug_dashboard():
                 tables = conn.execute(
                     "SELECT table_name FROM information_schema.tables WHERE table_schema='trading' ORDER BY table_name"
                 ).fetchall()
-                for (tname,) in tables:
+                for tname_row in tables:
+                    tname = tname_row["table_name"]
                     try:
-                        cnt = conn.execute(f'SELECT COUNT(*) FROM "{tname}"').fetchone()[0]
+                        cnt = conn.execute(f'SELECT COUNT(*) FROM "{tname}"').fetchone()["count"]
                         table_counts[tname] = cnt
                         total_rows += cnt
                     except Exception:
@@ -1200,23 +1201,23 @@ def debug_dashboard():
                     ).fetchone()
                     # Watchlist count
                     wl = conn.execute(
-                        "SELECT COUNT(*) FROM trader_watchlist WHERE agent_id=%s", (cid,)
+                        "SELECT COUNT(*) as cnt FROM trader_watchlist WHERE agent_id=%s", (cid,)
                     ).fetchone()
                     # Recent decisions
                     dec = conn.execute(
-                        "SELECT COUNT(*) FROM decisions WHERE agent_id=%s", (cid,)
+                        "SELECT COUNT(*) as cnt FROM decisions WHERE agent_id=%s", (cid,)
                     ).fetchone()
                     # Open positions
                     pos = conn.execute(
-                        "SELECT COUNT(*) FROM trader_positions WHERE agent_id=%s AND status='open'", (cid,)
+                        "SELECT COUNT(*) as cnt FROM trader_positions WHERE agent_id=%s AND status='open'", (cid,)
                     ).fetchone()
 
                     pv  = st["current_portfolio_value"] if st else 0
                     wr  = st["win_rate"] if st else 0
                     wt  = st["total_trades"] if st else 0
-                    wl_c = wl[0] if wl else 0
-                    dc_c = dec[0] if dec else 0
-                    po_c = pos[0] if pos else 0
+                    wl_c = wl["cnt"] if wl else 0
+                    dc_c = dec["cnt"] if dec else 0
+                    po_c = pos["cnt"] if pos else 0
                     freq = dict(cfg)["polling_freq_sec"] if cfg else "?"
 
                     pnl = round(pv - STARTING_VALUE, 2) if pv else 0

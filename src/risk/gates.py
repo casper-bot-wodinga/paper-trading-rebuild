@@ -19,6 +19,31 @@ import os
 from typing import Dict, Any, Tuple, Optional, List
 
 
+class BootstrapGate:
+    """Bypass all risk gates when portfolio is empty (bootstrap mode).
+
+    Allows first N trades without restriction to establish positions.
+    After bootstrap_max_trades trades are placed, delegates to normal gates.
+
+    Config key: bootstrap_max_trades (default: 5)
+    """
+
+    def __init__(self, max_trades: int = 5):
+        self.max_trades = max_trades
+
+    def check(
+        self,
+        context: Dict[str, Any],
+        action: Dict[str, Any],
+        timestamp: Optional[datetime] = None,
+    ) -> Tuple[bool, str]:
+        trades_closed = context.get("trades_closed", 0)
+        if trades_closed < self.max_trades:
+            remaining = self.max_trades - trades_closed
+            return True, f"Bootstrap: {remaining} trades remaining before full gates apply"
+        return True, "Bootstrap complete — delegating to normal gates"
+
+
 class CashGate:
     """Reject trades that would spend more than available cash.
 
