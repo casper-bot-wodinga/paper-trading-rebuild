@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# ── Add project src to path ──────────────────────────────────────────────────
+# -- Add project src to path --
 _PROJECT_SRC = str(Path(__file__).resolve().parent)
 if _PROJECT_SRC not in sys.path:
     sys.path.insert(0, _PROJECT_SRC)
@@ -38,7 +38,7 @@ from signals import SignalEngine, SignalParams
 
 log = logging.getLogger("nightly_replay")
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# -- Constants --
 
 # The 6 built-in variant templates (same structure as prompt_sweep.PERTURBATION_TEMPLATES
 # but with SL/TP adjusted to 1%/3% per the fix requirements).
@@ -121,15 +121,12 @@ _VARIANT_TEMPLATES: List[Dict[str, Any]] = [
     },
 ]
 
-# ── Fixes: SL/TP 1%/3%, history window 5+ days, conviction gating 0.4 ──────
+# -- Fixes: SL/TP 1%/3%, history window 5+ days, conviction gating 0.4 --
 # These are applied as the baseline SignalParams for the nightly run.
-# SL/TP: 1%/3% (not 5%/15%)
-# History window: momentum_lookback = 5 (at minimum 5 days for 5-min bars)
-# Conviction: single gate at 0.4 (not double 0.2)
-
+# Tuned for 5-min OHLC bars from Postgres.
 _NIGHTLY_PARAMS: Dict[str, float] = {
-    "momentum_threshold": 0.55,
-    "momentum_lookback": 20,       # 5+ days of 5-min bars
+    "momentum_threshold": 0.20,
+    "momentum_lookback": 12,
     "momentum_decay": 0.85,
     "rsi_oversold": 30.0,
     "rsi_overbought": 70.0,
@@ -140,16 +137,16 @@ _NIGHTLY_PARAMS: Dict[str, float] = {
     "base_size_pct": 0.15,
     "conviction_multiplier": 1.5,
     "max_positions": 5,
-    "stop_loss_pct": 0.01,         # FIX: 1% stop-loss (not 5%)
-    "take_profit_pct": 0.03,       # FIX: 3% take-profit (not 15%)
-    "trailing_stop_pct": 0.01,     # FIX: 1% trailing stop
+    "stop_loss_pct": 0.01,          # FIX: 1% stop-loss (not 5%)
+    "take_profit_pct": 0.03,        # FIX: 3% take-profit (not 15%)
+    "trailing_stop_pct": 0.01,      # FIX: 1% trailing stop
     "weight_trending_up": 1.0,
     "weight_trending_down": 0.5,
     "weight_mean_reverting": 0.8,
     "weight_high_volatility": 0.4,
 }
 
-# ── Data types ───────────────────────────────────────────────────────────────
+# -- Data types --
 
 
 @dataclass
@@ -172,9 +169,9 @@ class VariantResult:
         return self.score > 0.05
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Data loading — Postgres → 5-min OHLC bars → replay.Tick
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# Data loading - Postgres -> 5-min OHLC bars -> replay.Tick
+# ==============================================================================
 
 def load_bars_from_postgres(
     date_str: str,
@@ -182,7 +179,7 @@ def load_bars_from_postgres(
 ) -> pd.DataFrame:
     """Load bars from market_data.bars_5min for the given date + lookback.
 
-    Uses the `symbol` column (not `ticker` — this is a critical fix).
+    Uses the `symbol` column (not `ticker` - this is a critical fix).
 
     Args:
         date_str: Target date (YYYY-MM-DD).
@@ -232,21 +229,19 @@ def load_bars_from_postgres(
     return df
 
 
-def bin_to_5min_ohlc(df: pd.DataFrame) -> pd.DataFrame:
-    """Bin raw microsecond ticks to 5-min OHLC bars.
+def compress_to_5min_bars(df: pd.DataFrame) -> pd.DataFrame:
+    """Compress raw rows to one snapshot per 5-min bucket per symbol.
 
-    Resamples using pandas groupby + agg:
-      - open: first value in the 5-min bucket
-      - high: max high in the 5-min bucket
-      - low: min low in the 5-min bucket
-      - close: last value in the 5-min bucket
-      - volume: sum of volume in the 5-min bucket
+    The market_data.bars_5min table contains snapshots of the current bar
+    state at ~5-minute intervals. For days with genuine intraday data
+    (July 6-7), each 5-min bucket has a unique OHLCV snapshot. For days
+    with EOD data (July 8-10), all snapshots share the same OHLCV.
 
-    Args:
-        df: Raw bars DataFrame with symbol, timestamp, open, high, low, close, volume.
+    We take the LAST snapshot in each 5-min bucket (the most recent update)
+    and deduplicate identical consecutive OHLCV values to avoid flat runs.
 
     Returns:
-        DataFrame with one row per (symbol, 5-min bucket).
+        DataFrame with one row per (symbol, 5-min bucket, unique OHLCV).
     """
     df = df.copy()
 
@@ -254,28 +249,43 @@ def bin_to_5min_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     ts = pd.to_datetime(df["timestamp"])
     df["bucket"] = ts.dt.floor("5min")
 
-    # Group by symbol + bucket and aggregate
-    binned = df.groupby(["symbol", "bucket"], as_index=False).agg(
-        open=("open", "first"),
-        high=("high", "max"),
-        low=("low", "min"),
-        close=("close", "last"),
-        volume=("volume", "sum"),
-    )
+    # Take the last row in each 5-min bucket (most recent snapshot)
+    last_per_bucket = df.groupby(["symbol", "bucket"], as_index=False).last()
 
-    binned = binned.sort_values(["symbol", "bucket"]).reset_index(drop=True)
-    log.info("Binned %d raw rows → %d 5-min bars", len(df), len(binned))
-    return binned
+    # Remove consecutive duplicate OHLCV (same bar repeated across buckets)
+    # This handles EOD-data days where the same bar is snapped repeatedly
+    is_dup = (
+        (last_per_bucket.groupby("symbol")["close"].diff().abs() < 1e-6) &
+        (last_per_bucket.groupby("symbol")["open"].diff().abs() < 1e-6)
+    )
+    compressed = last_per_bucket[~is_dup].copy()
+
+    # Rename bucket to timestamp for downstream use
+    compressed = compressed.rename(columns={"bucket": "timestamp"})
+    compressed = compressed.drop(columns=["timestamp"])
+
+    # Actually keep the bucket as timestamp
+    compressed = last_per_bucket[~is_dup].copy()
+    # Drop the original timestamp column, keep the bucket as the timestamp
+    compressed = compressed.drop(columns=["timestamp"])
+    compressed = compressed.rename(columns={"bucket": "timestamp"})
+
+    compressed = compressed.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+
+    log.info(
+        "Compressed %d raw rows to %d 5-min bars (%d removed)",
+        len(df), len(compressed), len(df) - len(compressed),
+    )
+    return compressed
 
 
 def bars_to_ticks(df: pd.DataFrame) -> List[Tick]:
     """Convert a 5-min OHLC DataFrame to replay.Tick objects.
 
-    Only includes US market hours (9:30 AM - 4:00 PM ET / 13:30-20:00 UTC).
-    From July 6-10, timestamps are in UTC, so market hours = 13:30-20:00 UTC.
+    Filters to US market hours (9:30 AM - 4:00 PM ET).
 
     Args:
-        df: DataFrame with columns: symbol, bucket, open, high, low, close, volume.
+        df: DataFrame with columns: symbol, timestamp, open, high, low, close, volume.
 
     Returns:
         Sorted list of Tick objects.
@@ -283,38 +293,39 @@ def bars_to_ticks(df: pd.DataFrame) -> List[Tick]:
     ticks: List[Tick] = []
 
     for _, row in df.iterrows():
-        ts = row["bucket"]
+        ts = row["timestamp"]
         if isinstance(ts, pd.Timestamp):
             ts = ts.to_pydatetime()
 
         # Filter to US market hours (9:30 AM - 4:00 PM ET = 13:30-20:00 UTC)
-        # If the timestamp is naive, assume UTC
         hour = ts.hour + ts.minute / 60.0
         if hour < 13.5 or hour >= 20.0:
             continue
 
-        # Compute momentum from the bar's OHLC (simple return)
-        momentum = (row["close"] - row["open"]) / row["open"] if row["open"] > 0 else 0.0
+        open_price = float(row["open"])
+        close_price = float(row["close"])
+        bar_return = (close_price - open_price) / open_price if open_price > 0 else 0.0
+        bar_range = abs(float(row["high"] - row["low"]) / open_price) if open_price > 0 else 0.0
 
         ticks.append(Tick(
             timestamp=ts,
             ticker=row["symbol"],
-            open=float(row["open"]),
+            open=open_price,
             high=float(row["high"]),
             low=float(row["low"]),
-            close=float(row["close"]),
+            close=close_price,
             volume=int(row["volume"]),
-            momentum=momentum * 100.0,  # Scale to percentage
-            volatility=abs(float(row["high"] - row["low"]) / row["open"]) if row["open"] > 0 else 0.0,
+            momentum=bar_return * 100.0,
+            volatility=bar_range,
         ))
 
     ticks.sort(key=lambda t: (t.timestamp, t.ticker))
-    log.info("Converted %d bars → %d Tick objects (market hours only)", len(df), len(ticks))
+    log.info("Converted %d bars to %d Tick objects (market hours)", len(df), len(ticks))
     return ticks
 
 
 def load_ticks_for_date(date_str: str, lookback_days: int = 5) -> List[Tick]:
-    """One-stop: load from Postgres, bin to 5-min OHLC, convert to Ticks.
+    """One-stop: load from Postgres, compress to 5-min bars, convert to Ticks.
 
     Args:
         date_str: Target date (YYYY-MM-DD).
@@ -324,24 +335,47 @@ def load_ticks_for_date(date_str: str, lookback_days: int = 5) -> List[Tick]:
         Sorted list of Tick objects for replay.
     """
     df = load_bars_from_postgres(date_str, lookback_days=lookback_days)
-    binned = bin_to_5min_ohlc(df)
-    ticks = bars_to_ticks(binned)
+    compressed = compress_to_5min_bars(df)
+    ticks = bars_to_ticks(compressed)
     return ticks
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# Multi-ticker SignalEngine wrapper
+# ==============================================================================
+
+class MultiTickerSignalEngine:
+    """Wraps SignalEngine to handle per-ticker price history correctly.
+
+    The SignalEngine already maintains per-ticker state internally, but
+    we need to ensure that ticks from different tickers don't interfere
+    with each other's price history.
+    """
+
+    def __init__(self, params: SignalParams):
+        self.params = params
+        self._engines: Dict[str, SignalEngine] = {}
+
+    def process(self, tick: Tick) -> Any:
+        if tick.ticker not in self._engines:
+            self._engines[tick.ticker] = SignalEngine(params=self.params)
+        return self._engines[tick.ticker].process(tick)
+
+
+# ==============================================================================
 # Trader function builder (signal-only, no LLM)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def make_signal_trader(params: SignalParams) -> TraderFn:
     """Create a signal-only trader function (no LLM).
 
     Uses SignalEngine with the given params. This is the --dry-run mode
-    trader — deterministic, fast, no external API calls.
+    trader - deterministic, fast, no external API calls.
 
     FIXES applied:
       - SL/TP: 1%/3% (from params)
       - Conviction gating: single gate at 0.4 minimum (not double 0.2)
+      - History window: 5+ days for momentum lookback (from params)
 
     Args:
         params: SignalParams for this variant.
@@ -349,18 +383,19 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
     Returns:
         Callable matching TraderFn signature.
     """
-    engine = SignalEngine(params=params)
+    # Use MultiTickerSignalEngine to ensure per-ticker state isolation
+    engine = MultiTickerSignalEngine(params=params)
     # FIX: single conviction gate at 0.4
     MIN_CONVICTION = 0.4
 
     def trader_fn(tick: Tick, portfolio: Portfolio) -> TraderDecision:
         report = engine.process(tick)
 
-        # If we already hold this ticker, check risk management & exit
+        # If we already hold this ticker, check risk management and exit
         if tick.ticker in portfolio.positions:
             pos = portfolio.positions[tick.ticker]
 
-            # Check stop loss — FIX: 1% SL (from params)
+            # Check stop loss - FIX: 1% SL (from params)
             if tick.close <= report.stop_loss:
                 return TraderDecision(
                     ticker=tick.ticker,
@@ -371,7 +406,7 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
                     signal_override=True,
                 )
 
-            # Check take profit — FIX: 3% TP (from params)
+            # Check take profit - FIX: 3% TP (from params)
             if tick.close >= report.take_profit:
                 return TraderDecision(
                     ticker=tick.ticker,
@@ -390,15 +425,28 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
             )
 
         # Entry logic: single conviction gate at 0.4
-        if (report.momentum_signal == "BULLISH"
+        # Accept either BULLISH momentum OR OVERSOLD RSI (contrarian entry)
+        # for daily/5-min data where momentum signals are subtle.
+        can_enter = False
+        reasons = []
+
+        if report.momentum_signal == "BULLISH" and report.conviction >= MIN_CONVICTION:
+            can_enter = True
+            reasons.append(f"bullish(mom={report.momentum_score:.2f})")
+
+        if (report.rsi_signal == "OVERSOLD"
                 and report.conviction >= MIN_CONVICTION
                 and portfolio.position_count < report.max_positions):
+            can_enter = True
+            reasons.append(f"oversold(rsi={report.rsi:.1f},conv={report.conviction:.2f})")
+
+        if can_enter and portfolio.position_count < report.max_positions:
             return TraderDecision(
                 ticker=tick.ticker,
                 decision="BUY",
                 conviction=report.conviction,
-                rationale=f"Bullish signal: momentum={report.momentum_score:.2f}, "
-                          f"RSI={report.rsi:.1f}, regime={report.regime}",
+                rationale=f"Entry: {' + '.join(reasons)}, "
+                          f"regime={report.regime}",
                 shares=0,
             )
 
@@ -412,11 +460,11 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
     return trader_fn
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # Variant generation
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
-def generate_variant_params(baseline_params: SignalParams) -> List[SignalParams]:
+def generate_variant_params(baseline_params: SignalParams) -> List[Tuple[str, str, SignalParams]]:
     """Generate variant parameter sets from the baseline.
 
     Applies the _VARIANT_TEMPLATES to create distinct parameter sets.
@@ -455,9 +503,9 @@ def generate_variant_params(baseline_params: SignalParams) -> List[SignalParams]
     return variants
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # Scoring
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def score_variant(
     params: SignalParams,
@@ -475,9 +523,7 @@ def score_variant(
     harness = ReplayHarness(
         initial_balance=100_000.0,
         max_position_pct=params.base_size_pct,
-        # FIX: single conviction gate at 0.4 — the harness require_conviction
-        # only gates BUY entries, which is exactly what we want.
-        # SELL exits (SL/TP) are always allowed via signal_override.
+        # FIX: single conviction gate at 0.4
         require_conviction=0.4,
     )
 
@@ -490,9 +536,9 @@ def score_variant(
     return float(score), result
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # Leaderboard
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def print_leaderboard(
     results: List[VariantResult],
@@ -524,7 +570,7 @@ def print_leaderboard(
     )
 
     for i, r in enumerate(sorted_results, 1):
-        flag = " ★" if r.score > baseline_score + 0.05 else ""
+        flag = " *" if r.score > baseline_score + 0.05 else ""
         print(f"  {i:<5} {r.variant_name:<25} {r.score:<10.4f} "
               f"{r.calmar:<10.2f} {r.profit_factor:<8.2f} "
               f"{r.win_rate:<10.1%} {r.n_trades:<7} "
@@ -533,18 +579,18 @@ def print_leaderboard(
     # Find winner
     best = sorted_results[0] if sorted_results else None
     if best and best.score > baseline_score + 0.05:
-        print(f"\n  🏆 Winner: {best.variant_name} (score: {best.score:.4f} vs baseline: {baseline_score:.4f})")
+        print(f"\n  WINNER: {best.variant_name} (score: {best.score:.4f} vs baseline: {baseline_score:.4f})")
     else:
-        print(f"\n  ❌ No variant beat baseline significantly")
+        print(f"\n  No variant beat baseline significantly")
         if best:
             print(f"     Best: {best.variant_name} ({best.score:.4f}) vs baseline ({baseline_score:.4f})")
 
     print(f"{'='*80}\n")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # Main
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def run_nightly_replay(
     date_str: str,
@@ -563,29 +609,29 @@ def run_nightly_replay(
     """
     t0 = time.time()
 
-    # ── 1. Load data ────────────────────────────────────────────────────
+    # -- 1. Load data --
     print(f"[nightly_replay] Loading bars from Postgres for {date_str} "
           f"(lookback: {lookback_days}d)...")
     ticks = load_ticks_for_date(date_str, lookback_days=lookback_days)
     print(f"[nightly_replay] Loaded {len(ticks)} ticks for {date_str}")
 
     if not ticks:
-        print("[nightly_replay] ERROR: No ticks loaded — aborting")
+        print("[nightly_replay] ERROR: No ticks loaded - aborting")
         return []
 
-    # ── 2. Setup baseline params ────────────────────────────────────────
+    # -- 2. Setup baseline params --
     baseline_params = SignalParams.from_dict(_NIGHTLY_PARAMS)
     print(f"[nightly_replay] Baseline params: SL={baseline_params.stop_loss_pct:.0%}, "
           f"TP={baseline_params.take_profit_pct:.0%}, "
           f"mom_lookback={baseline_params.momentum_lookback}, "
           f"conviction_gate=0.4")
 
-    # ── 3. Generate variants ────────────────────────────────────────────
+    # -- 3. Generate variants --
     variants = generate_variant_params(baseline_params)
     print(f"[nightly_replay] Generated {len(variants)} variants "
           f"(baseline + {len(variants) - 1} perturbations)")
 
-    # ── 4. Score each variant ────────────────────────────────────────────
+    # -- 4. Score each variant --
     results: List[VariantResult] = []
     variant_id = 0
 
@@ -619,7 +665,7 @@ def run_nightly_replay(
 
         variant_id += 1
 
-    # ── 5. Print leaderboard ────────────────────────────────────────────
+    # -- 5. Print leaderboard --
     total_elapsed = time.time() - t0
     print_leaderboard(results, results[0].score, len(ticks), total_elapsed)
 
@@ -628,7 +674,7 @@ def run_nightly_replay(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Nightly Replay — Postgres-backed prompt variant sweep",
+        description="Nightly Replay - Postgres-backed prompt variant sweep",
     )
     parser.add_argument(
         "--date", type=str, default=None,
