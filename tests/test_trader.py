@@ -168,7 +168,7 @@ class TestTraderBasic:
             )
 
         trader.set_decider(always_buy)
-        tick = DummyTick(close=150.0)
+        tick = DummyTick(close=150.0, timestamp=datetime(2024, 1, 2, 10, 0))
         decision = trader.process_tick(tick)
         assert decision is not None
         assert decision.decision == "BUY"
@@ -182,7 +182,10 @@ class TestTraderBasic:
         trader.state.total_pnl = 100
 
         # Feed one more tick with a trade opportunity
+        # Override timestamps to be during market hours (10:00 ET)
         ticks = make_uptrend_ticks(n=1, step_pct=0.02)
+        for t in ticks:
+            t.timestamp = datetime(2024, 1, 2, 10, 0)
 
         # Force a winning trade
         def force_trade(tick, signal, state, ctx=None):

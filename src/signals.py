@@ -351,13 +351,15 @@ class SignalEngine:
         self._price_history: Dict[str, List[float]] = {}  # ticker → [closes...]
         self._volume_history: Dict[str, List[int]] = {}    # ticker → [volumes...]
 
-    def process(self, tick: Any, fear_greed: Optional[float] = None) -> SignalReport:
+    def process(self, tick: Any, fear_greed: Optional[float] = None, bootstrap: bool = False) -> SignalReport:
         """Process a tick and return a signal report.
 
         Args:
             tick: A Tick-like object with .ticker, .close, .timestamp, etc.
             fear_greed: Optional Fear & Greed index (0-100). Enables CHOPPY+ExtremeFear
                         volume bypass when ≤ 30 and regime is MEAN_REVERTING.
+            bootstrap: If True, bypass volume filter so traders can build initial
+                       positions during warmup when volume history is sparse.
 
         Returns:
             SignalReport with all computed signals.
@@ -423,9 +425,11 @@ class SignalEngine:
         # Bootstrap / Extreme Fear bypass:
         # (1) Extreme Fear (F&G ≤ 30) — market capitulation, opportunity not threat.
         #     Bypass volume filter across ALL regimes so traders can act.
-        # (2) Bootstrap mode — when F&G ≤ 35, relax filter; traders need to
-        #     build positions through fear environments.
-        if fear_greed is not None and fear_greed <= 30.0:
+        # (2) Bootstrap mode — bypass volume filter so traders with no positions
+        #     can build their opening positions during warmup even with thin data.
+        if bootstrap:
+            volume_pass = True  # Bootstrap: bypass volume filter for new traders
+        elif fear_greed is not None and fear_greed <= 30.0:
             volume_pass = True  # Extreme Fear: bypass volume filter across all regimes
 
         # ── Risk ──────────────────────────────────────────────────────
