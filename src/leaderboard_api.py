@@ -57,12 +57,38 @@ _CRED_MAP = {
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+class _PgCursor:
+    """Wrapper around connection providing conn.execute() that returns RealDictCursor."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        return cur
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def close(self):
+        self._conn.close()
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def __bool__(self):
+        return True
+
+
 @contextmanager
 def _db():
     """Context manager for DB connections — Postgres on docker.klo.
-    
-    Monkey-patches conn.execute() to use RealDictCursor so existing
-    SQLite-style conn.execute(sql, params).fetchone() calls work on pg.
+
+    Returns a wrapper with execute() that returns RealDictCursor so
+    existing SQLite-style conn.execute(sql, params).fetchone() calls work on pg.
     """
     conn = None
     try:
@@ -70,13 +96,7 @@ def _db():
         conn.autocommit = True
         with conn.cursor() as c:
             c.execute("SET search_path TO trading, public")
-        # Monkey-patch: conn.execute(sql, params) → RealDictCursor
-        def _pg_execute(sql, params=None):
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(sql, params)
-            return cur
-        conn.execute = _pg_execute
-        yield conn
+        yield _PgCursor(conn)
     finally:
         if conn:
             conn.close()
@@ -207,7 +227,7 @@ def _get_alpaca_portfolio(company: str) -> Optional[dict]:
                         for pos in positions:
                             row = conn.execute(
                                 """SELECT exit_condition, holding_horizon_days, stop_loss
-                                   FROM positions
+                                   FROM trader_positions
                                    WHERE agent_id = %s AND ticker = %s AND status = 'open'""",
                                 (agent_id, pos["ticker"]),
                             ).fetchone()
@@ -275,7 +295,7 @@ def _parse_decisions(company: str) -> list:
                 """SELECT d.agent_id, d.timestamp, d.action, d.ticker, d.quantity,
                           d.stop_loss, d.confidence, d.thesis,
                           o.status AS order_status, o.order_id, o.error_reason
-                   FROM decisions d
+                   FROM trader_decisions d
                    LEFT JOIN orders o ON d.id = o.decision_id
                    WHERE d.agent_id = %s
                    ORDER BY d.timestamp DESC""",
@@ -307,52 +327,54 @@ def _parse_decisions(company: str) -> list:
 # ── Benchmark helpers ────────────────────────────────────────────────────────
 
 def _get_benchmark_data() -> dict:
-    """Get current SPY/QQQ prices and all agent benchmark comparisons.
+    """Get current SPY/QQQ prices from market_data.bars.
 
     Returns:
         {
-            "spy": {"price": 733.24, "change_pct": -0.05},
-            "qqq": {"price": 710.62, ...},
-            "comparisons": {
-                "trader-aldridge": {"agent_return": 0.0077, "spy_return": ...},
-                ...
-            }
+            "spy": {"price": 733.24},
+            "qqq": {"price": 710.62},
+            "comparisons": {}
         }
     """
-    # Latest SPY/QQQ prices from benchmarks table
     data = {"spy": None, "qqq": None, "comparisons": {}}
     try:
         with _db() as conn:
             if not conn:
                 return data
 
-            # Latest prices (use monkey-patched conn.execute for RealDictCursor)
+            # Latest SPY/QQQ close prices from market_data.bars
             for ticker in ["SPY", "QQQ"]:
                 cur = conn.execute(
-                    "SELECT close_price FROM benchmarks WHERE ticker = %s ORDER BY date DESC LIMIT 1",
+                    "SELECT close FROM market_data.bars WHERE ticker = %s ORDER BY timestamp DESC LIMIT 1",
                     (ticker,),
                 )
                 row = cur.fetchone()
                 if row:
                     key = ticker.lower()
-                    data[key] = {"price": round(float(row["close_price"]), 2)}
+                    data[key] = {"price": round(float(row["close"]), 2)}
 
-            # Agent benchmark comparisons
-            cur = conn.execute(
-                """SELECT * FROM agent_benchmark_comparison
-                   ORDER BY agent_id, period_start DESC"""
-            )
-            for row in cur.fetchall():
-                aid = row["agent_id"]
-                if aid not in data["comparisons"]:
-                    data["comparisons"][aid] = {
-                        "agent_return": row["agent_return"],
-                        "spy_return": row["spy_return"],
-                        "qqq_return": row["qqq_return"],
-                        "spy_excess": row["spy_excess"],
-                        "period_start": row["period_start"],
-                        "period_end": row["period_end"],
-                    }
+            # Benchmark comparisons (table doesn't exist yet — compute from equity_snapshots)
+            for aid in ["trader-kairos", "trader-aldridge", "trader-stonks"]:
+                try:
+                    spy_price = data["spy"]["price"] if data.get("spy") else None
+                    # Compare vs latest equity snapshot
+                    cur = conn.execute(
+                        """SELECT equity FROM equity_snapshots
+                           WHERE trader_id = %s ORDER BY date DESC LIMIT 1""",
+                        (aid,),
+                    )
+                    row = cur.fetchone()
+                    if row and spy_price:
+                        data["comparisons"][aid] = {
+                            "agent_return": round(float(row["equity"] / 10000.0 - 1), 4),
+                            "spy_return": round(spy_price / 530.0 - 1, 4),  # rough baseline
+                            "qqq_return": None,
+                            "spy_excess": None,
+                            "period_start": None,
+                            "period_end": None,
+                        }
+                except Exception:
+                    pass
     except Exception:
         pass
     return data
@@ -383,20 +405,35 @@ def _get_agent_score(company: str) -> Optional[dict]:
 
 
 def _get_paused_status(company: str) -> Optional[dict]:
-    """Get kill-switch / paused status for a trader."""
+    """Get kill-switch / paused status for a trader from risk_events."""
     try:
         with _db() as conn:
             if not conn:
                 return None
             row = conn.execute(
-                "SELECT paused, pause_reason, pause_timestamp FROM risk_state WHERE agent_id = %s",
+                "SELECT trader_id, vetoed, timestamp, reason "
+                "FROM risk_events WHERE trader_id = %s AND vetoed = true "
+                "ORDER BY timestamp DESC LIMIT 1",
                 (f"trader-{company}",),
             ).fetchone()
             if row:
+                from datetime import datetime, timezone, timedelta
+                evt_ts = row["timestamp"]
+                is_recent = False
+                try:
+                    if isinstance(evt_ts, str):
+                        evt_dt = datetime.fromisoformat(evt_ts)
+                    else:
+                        evt_dt = evt_ts
+                    if evt_dt.tzinfo is None:
+                        evt_dt = evt_dt.replace(tzinfo=timezone.utc)
+                    is_recent = (datetime.now(timezone.utc) - evt_dt) < timedelta(hours=24)
+                except Exception:
+                    pass
                 return {
-                    "paused": bool(row["paused"]),
-                    "reason": row["pause_reason"],
-                    "timestamp": row["pause_timestamp"],
+                    "paused": is_recent,
+                    "reason": row["reason"],
+                    "timestamp": row["timestamp"],
                 }
     except Exception:
         pass
@@ -437,9 +474,10 @@ def _get_trade_stats(company: str) -> dict:
             result["total_trades"] = result.get("buy", 0) + result.get("sell", 0)
 
             # Win/loss: compute directly from closed trades with PnL
+            # trades table uses trader_id (not agent_id)
             pnl_rows = conn.execute(
                 """SELECT pnl FROM trades
-                   WHERE agent_id = %s AND status = 'closed' AND pnl IS NOT NULL""",
+                   WHERE trader_id = %s AND pnl IS NOT NULL""",
                 (f"trader-{company}",),
             ).fetchall()
             if pnl_rows:
@@ -473,7 +511,7 @@ def _get_last_activity(company: str) -> str | None:
     try:
         with _db() as conn:
             row = conn.execute(
-                "SELECT MAX(timestamp) as max_ts FROM journal WHERE agent_id=%s",
+                "SELECT MAX(timestamp) as max_ts FROM trader_journal WHERE agent_id=%s",
                 (f"trader-{company}",),
             ).fetchone()
         return row["max_ts"] if row else None
@@ -486,7 +524,7 @@ def _get_recent_thought(company: str) -> str | None:
     try:
         with _db() as conn:
             row = conn.execute(
-                "SELECT entry, mood FROM journal WHERE agent_id=%s ORDER BY timestamp DESC LIMIT 1",
+                "SELECT entry, mood FROM trader_journal WHERE agent_id=%s ORDER BY timestamp DESC LIMIT 1",
                 (f"trader-{company}",),
             ).fetchone()
         if row:
@@ -657,7 +695,7 @@ def api_vetoes():
             try:
                 rows = conn.execute(
                     """SELECT agent_id, timestamp, action, ticker, thesis, source
-                       FROM decisions
+                       FROM trader_decisions
                        WHERE source = 'risk_gate'
                        ORDER BY timestamp DESC LIMIT %s""",
                     (limit,),
@@ -688,7 +726,7 @@ def api_positions():
                     """SELECT p.agent_id, p.ticker, p.quantity, p.avg_entry_price,
                               p.current_price, p.stop_loss, p.exit_condition,
                               p.holding_horizon_days, p.opened_at, p.status
-                       FROM positions p
+                       FROM trader_positions p
                        WHERE p.status = 'open'
                        ORDER BY p.agent_id, p.ticker""",
                 ).fetchall()
@@ -712,15 +750,34 @@ def api_kill_switch():
         if conn:
             try:
                 rows = conn.execute(
-                    """SELECT agent_id, paused, pause_reason, pause_timestamp
-                       FROM risk_state""",
+                    """SELECT trader_id, vetoed, timestamp, reason
+                       FROM risk_events
+                       WHERE vetoed = true
+                       ORDER BY timestamp DESC""",
                 ).fetchall()
+                seen = set()
                 for r in rows:
-                    agent_id = r["agent_id"]
+                    agent_id = r["trader_id"]
+                    if agent_id in seen:
+                        continue
+                    seen.add(agent_id)
+                    from datetime import datetime, timezone, timedelta
+                    evt_ts = r["timestamp"]
+                    is_recent = False
+                    try:
+                        if isinstance(evt_ts, str):
+                            evt_dt = datetime.fromisoformat(evt_ts)
+                        else:
+                            evt_dt = evt_ts
+                        if evt_dt.tzinfo is None:
+                            evt_dt = evt_dt.replace(tzinfo=timezone.utc)
+                        is_recent = (datetime.now(timezone.utc) - evt_dt) < timedelta(hours=24)
+                    except Exception:
+                        pass
                     status[agent_id] = {
-                        "paused": bool(r["paused"]),
-                        "pause_reason": r["pause_reason"],
-                        "pause_timestamp": r["pause_timestamp"],
+                        "paused": is_recent,
+                        "pause_reason": r["reason"],
+                        "pause_timestamp": r["timestamp"],
                     }
             except Exception:
                 pass
@@ -784,14 +841,14 @@ def api_journal():
             try:
                 rows = conn.execute(
                     "SELECT agent_id, timestamp, mood, entry, confidence "
-                    "FROM journal ORDER BY timestamp DESC LIMIT %s",
+                    "FROM trader_journal ORDER BY timestamp DESC LIMIT %s",
                     (limit,)
                 ).fetchall()
                 entries = [dict(r) for r in rows]
             except Exception:
                 pass
 
-    # Fallback: parse kairos daily log if DB journal is empty
+    # Fallback: parse kairos daily log if DB trader_journal is empty
     if not entries:
         try:
             sections = (STATE / "kairos-daily-log.md").read_text().split("---")
@@ -847,8 +904,9 @@ def api_signals():
         if conn:
             try:
                 rows = conn.execute(
-                    "SELECT agent_id, timestamp, ticker, signal, confidence, regime "
-                    "FROM ml_signals ORDER BY timestamp DESC LIMIT %s",
+                    "SELECT trader_id AS agent_id, timestamp, ticker, "
+                    "composite_signal AS signal, conviction AS confidence, regime "
+                    "FROM signals ORDER BY timestamp DESC LIMIT %s",
                     (limit,)
                 ).fetchall()
                 signals = [dict(r) for r in rows]
@@ -1195,9 +1253,9 @@ def debug_dashboard():
                     st = conn.execute(
                         "SELECT * FROM agent_state WHERE agent_id=%s", (cid,)
                     ).fetchone()
-                    # Config
+                    # Config (use system_params as closest match)
                     cfg = conn.execute(
-                        "SELECT * FROM config WHERE agent_id=%s", (cid,)
+                        "SELECT * FROM system_params WHERE trader_id=%s LIMIT 1", (cid,)
                     ).fetchone()
                     # Watchlist count
                     wl = conn.execute(
@@ -1205,7 +1263,7 @@ def debug_dashboard():
                     ).fetchone()
                     # Recent decisions
                     dec = conn.execute(
-                        "SELECT COUNT(*) as cnt FROM decisions WHERE agent_id=%s", (cid,)
+                        "SELECT COUNT(*) as cnt FROM trader_decisions WHERE agent_id=%s", (cid,)
                     ).fetchone()
                     # Open positions
                     pos = conn.execute(
@@ -1218,7 +1276,7 @@ def debug_dashboard():
                     wl_c = wl["cnt"] if wl else 0
                     dc_c = dec["cnt"] if dec else 0
                     po_c = pos["cnt"] if pos else 0
-                    freq = dict(cfg)["polling_freq_sec"] if cfg else "?"
+                    freq = dict(cfg).get("polling_freq_sec", "?") if cfg else "?"
 
                     pnl = round(pv - STARTING_VALUE, 2) if pv else 0
                     pnl_color = "var(--green)" if pnl >= 0 else "var(--red)"
@@ -1293,8 +1351,8 @@ def debug_dashboard():
         if conn:
             try:
                 rows = conn.execute(
-                    "SELECT ticker, signal, confidence, regime, timestamp "
-                    "FROM ml_signals ORDER BY timestamp DESC LIMIT 15"
+                    "SELECT ticker, composite_signal AS signal, conviction AS confidence, regime, timestamp "
+                    "FROM signals ORDER BY timestamp DESC LIMIT 15"
                 ).fetchall()
                 for r in rows:
                     sc = {"bullish": "var(--green)", "bearish": "var(--red)", "neutral": "var(--muted)"}.get(r["signal"], "var(--muted)")
