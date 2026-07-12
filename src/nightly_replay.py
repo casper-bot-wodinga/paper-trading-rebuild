@@ -245,7 +245,8 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
       - History window: 3+ days for daily momentum
     """
     engine = MultiTickerSignalEngine(params=params)
-    MIN_CONVICTION = 0.4
+    MIN_CONVICTION = 0.15
+    MIN_CONVICTION_BULLISH = 0.2  # Slightly higher for momentum entries
 
     def trader_fn(tick: Tick, portfolio: Portfolio) -> TraderDecision:
         report = engine.process(tick)
@@ -269,7 +270,7 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
 
         # Entry: momentum BULLISH + single conviction gate
         if (report.momentum_signal == "BULLISH"
-                and report.conviction >= MIN_CONVICTION
+                and report.conviction >= MIN_CONVICTION_BULLISH
                 and portfolio.position_count < report.max_positions):
             return TraderDecision(
                 ticker=tick.ticker, decision="BUY",
@@ -278,7 +279,7 @@ def make_signal_trader(params: SignalParams) -> TraderFn:
                           f"rsi={report.rsi:.1f} reg={report.regime}",
                 shares=0)
 
-        # Entry: oversold RSI contrarian
+        # Entry: RSI oversold contrarian
         if (report.rsi_signal == "OVERSOLD"
                 and report.conviction >= MIN_CONVICTION
                 and portfolio.position_count < report.max_positions):
@@ -333,7 +334,7 @@ def score_variant(params: SignalParams, ticks: List[Tick]) -> Tuple[float, Any]:
     harness = ReplayHarness(
         initial_balance=100_000.0,
         max_position_pct=params.base_size_pct,
-        require_conviction=0.4,
+        require_conviction=0.15,
     )
     trader_fn = make_signal_trader(params)
     result = harness.run(ticks, trader_fn)
@@ -412,7 +413,16 @@ def run_nightly_replay(
         return []
 
     # 2. Setup baseline params
-    baseline_params = SignalParams.from_dict(_NIGHTLY_PARAMS)
+    # NOTE: SignalParams.from_dict() clips to its hard-coded bounds
+    # (e.g. momentum_threshold min=0.3, momentum_lookback min=5).
+    # For daily bars we need sub-bound values, so we create the
+    # dataclass directly and let clip_all() use the bounds we set.
+    # We bypass SignalParams.bound() by setting attributes directly.
+    from dataclasses import fields as dc_fields
+    baseline_params = SignalParams()
+    for name, value in _NIGHTLY_PARAMS.items():
+        if hasattr(baseline_params, name) and name != "_BOUNDS":
+            setattr(baseline_params, name, value)
     print(f"[nightly_replay] Baseline: SL={baseline_params.stop_loss_pct:.0%} "
           f"TP={baseline_params.take_profit_pct:.0%} "
           f"mom_lk={baseline_params.momentum_lookback} "
