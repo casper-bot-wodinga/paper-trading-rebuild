@@ -86,6 +86,131 @@ TRADER_PARAM_SCHEMAS: dict[str, list[TraderParam]] = {
 
 
 # ---------------------------------------------------------------------------
+# Carry-over state — multi-day portfolio persistence
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Position:
+    """An open position carried across trading days."""
+
+    ticker: str
+    shares: int
+    entry_price: float
+    entry_date: str  # ISO-8601 date string
+
+    def current_value(self, current_price: float) -> float:
+        return self.shares * current_price
+
+    def unrealized_pnl(self, current_price: float) -> float:
+        return self.shares * (current_price - self.entry_price)
+
+    def to_dict(self) -> dict:
+        return {"ticker": self.ticker, "shares": self.shares,
+                "entry_price": self.entry_price, "entry_date": self.entry_date}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Position":
+        return cls(ticker=d["ticker"], shares=d["shares"],
+                   entry_price=d["entry_price"], entry_date=d["entry_date"])
+
+
+@dataclass
+class SimState:
+    """Complete simulation state carried across days.
+
+    Holds cash, open positions, cumulative P&L, and the full trade log.
+    Designed to be serializable to/from a plain dict for checkpoint/resume.
+    """
+
+    cash: float
+    positions: dict[str, Position]  # ticker -> Position (max 1 per ticker)
+    trade_log: list[dict]
+    cumulative_realized_pnl: float
+    initial_capital: float
+    trader_type: str
+    params: dict[str, Any]
+    current_date: str = ""
+    trade_count: int = 0
+    portfolio_value_history: list[dict] = field(default_factory=list)
+
+    def total_equity(self, prices: dict[str, float]) -> float:
+        """Cash + market value of all open positions at given prices."""
+        pos_value = sum(
+            pos.shares * prices.get(pos.ticker, pos.entry_price)
+            for pos in self.positions.values()
+        )
+        return self.cash + pos_value
+
+    def total_unrealized_pnl(self, prices: dict[str, float]) -> float:
+        return sum(
+            pos.unrealized_pnl(prices.get(pos.ticker, pos.entry_price))
+            for pos in self.positions.values()
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "cash": self.cash,
+            "positions": {t: p.to_dict() for t, p in self.positions.items()},
+            "trade_log": self.trade_log,
+            "cumulative_realized_pnl": self.cumulative_realized_pnl,
+            "initial_capital": self.initial_capital,
+            "trader_type": self.trader_type,
+            "params": self.params,
+            "current_date": self.current_date,
+            "trade_count": self.trade_count,
+            "portfolio_value_history": self.portfolio_value_history,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SimState":
+        return cls(
+            cash=d["cash"],
+            positions={t: Position.from_dict(p) for t, p in d["positions"].items()},
+            trade_log=d["trade_log"],
+            cumulative_realized_pnl=d["cumulative_realized_pnl"],
+            initial_capital=d["initial_capital"],
+            trader_type=d["trader_type"],
+            params=d["params"],
+            current_date=d.get("current_date", ""),
+            trade_count=d.get("trade_count", 0),
+            portfolio_value_history=d.get("portfolio_value_history", []),
+        )
+
+    def serialize(self) -> str:
+        return json.dumps(self.to_dict(), indent=2)
+
+    @classmethod
+    def deserialize(cls, raw: str) -> "SimState":
+        return cls.from_dict(json.loads(raw))
+
+    def clone(self) -> "SimState":
+        """Deep copy via serialize/deserialize."""
+        return SimState.deserialize(self.serialize())
+
+
+def create_initial_state(
+    capital: float,
+    trader_type: str,
+    params: dict[str, Any],
+    current_date: str = "",
+) -> SimState:
+    """Create a fresh SimState with no positions."""
+    return SimState(
+        cash=capital,
+        positions={},
+        trade_log=[],
+        cumulative_realized_pnl=0.0,
+        initial_capital=capital,
+        trader_type=trader_type,
+        params=params,
+        current_date=current_date,
+        trade_count=0,
+        portfolio_value_history=[],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Strategy simulation
 # ---------------------------------------------------------------------------
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -301,6 +426,264 @@ def _strategy_kairos(
     if rsi >= rsi_mom and sma20 > sma50 and volume > 0:
         return "BUY"
     return None
+
+
+# ---------------------------------------------------------------------------
+# Carry-over simulation — day-by-day state threading
+# ---------------------------------------------------------------------------
+
+
+def _prepare_market_data(ticker: str, period: str = "3mo") -> Optional[pd.DataFrame]:
+    """Download and flatten market data. Returns None on failure."""
+    try:
+        data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+    except Exception:
+        return None
+    if data is None or (hasattr(data, 'empty') and data.empty) or (hasattr(data, '__len__') and len(data) < 20):
+        return None
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+    return data
+
+
+def _compute_indicators(data: pd.DataFrame) -> dict[str, pd.Series]:
+    """Pre-compute indicator series for the full dataset.
+
+    Returns dict of named Series (close, volume, high, low, rsi, sma20, sma50, avg_volume).
+    """
+    close = data["Close"].squeeze()
+    volume = data["Volume"].squeeze() if "Volume" in data.columns else pd.Series(0, index=close.index)
+    high = data["High"].squeeze() if "High" in data.columns else close
+    low = data["Low"].squeeze() if "Low" in data.columns else close
+
+    return {
+        "close": close,
+        "volume": volume,
+        "high": high,
+        "low": low,
+        "rsi": compute_rsi(close),
+        "sma20": compute_sma(close, 20),
+        "sma50": compute_sma(close, 50),
+        "avg_volume": volume.rolling(20).mean(),
+    }
+
+
+def _step_day(
+    state: SimState,
+    date: pd.Timestamp,
+    indicators: dict[str, pd.Series],
+    idx: int,
+) -> SimState:
+    """Process one trading day and return the updated state.
+
+    Args:
+        state: Current simulation state (will be modified in-place for efficiency).
+        date: The current trading date.
+        indicators: Dict of pre-computed indicator Series.
+        idx: Index into the indicator Series for this day.
+
+    Returns:
+        The same state object (mutated) with updated positions, cash, and log.
+    """
+    close = float(indicators["close"].iloc[idx])
+    high = float(indicators["high"].iloc[idx])
+    low = float(indicators["low"].iloc[idx])
+    cur_rsi = float(indicators["rsi"].iloc[idx]) if not pd.isna(indicators["rsi"].iloc[idx]) else 50.0
+    cur_sma20 = float(indicators["sma20"].iloc[idx]) if not pd.isna(indicators["sma20"].iloc[idx]) else close
+    cur_sma50 = float(indicators["sma50"].iloc[idx]) if not pd.isna(indicators["sma50"].iloc[idx]) else close
+    cur_vol = float(indicators["volume"].iloc[idx]) if not pd.isna(indicators["volume"].iloc[idx]) else 0
+    cur_avg_vol = float(indicators["avg_volume"].iloc[idx]) if not pd.isna(indicators["avg_volume"].iloc[idx]) else 1
+
+    ticker = indicators["close"].name if hasattr(indicators["close"], "name") else ""
+    date_str = str(date.date())
+    state.current_date = date_str
+
+    params = state.params
+    trader_type = state.trader_type
+    stop_pct = params.get("stop_loss_pct", 8.0) / 100.0
+    tp_pct = params.get("take_profit_pct", 0) / 100.0
+    trailing_pct = params.get("trailing_stop_pct", 0) / 100.0
+
+    # --- Check exits on open positions ---
+    for ticker_key in list(state.positions.keys()):
+        pos = state.positions[ticker_key]
+
+        # Simple stop loss
+        if low <= pos.entry_price * (1 - stop_pct):
+            proceeds = pos.shares * close
+            pnl = proceeds - (pos.shares * pos.entry_price)
+            state.cash += proceeds
+            state.cumulative_realized_pnl += pnl
+            state.trade_count += 1
+            state.trade_log.append({
+                "date": date_str, "action": "SELL", "price": close,
+                "shares": pos.shares, "pnl": round(pnl, 2), "reason": "stop_loss",
+                "ticker": ticker_key,
+            })
+            del state.positions[ticker_key]
+            continue
+
+        # Take profit
+        if tp_pct > 0 and high >= pos.entry_price * (1 + tp_pct):
+            proceeds = pos.shares * close
+            pnl = proceeds - (pos.shares * pos.entry_price)
+            state.cash += proceeds
+            state.cumulative_realized_pnl += pnl
+            state.trade_count += 1
+            state.trade_log.append({
+                "date": date_str, "action": "SELL", "price": close,
+                "shares": pos.shares, "pnl": round(pnl, 2), "reason": "take_profit",
+                "ticker": ticker_key,
+            })
+            del state.positions[ticker_key]
+            continue
+
+    # --- Entry signal (only if no position for this ticker) ---
+    if ticker and ticker not in state.positions:
+        extract = {
+            "stonks": _strategy_stonks,
+            "aldridge": _strategy_aldridge,
+            "kairos": _strategy_kairos,
+        }
+        strategy_fn = extract.get(trader_type)
+        if strategy_fn:
+            signal = strategy_fn(
+                idx, close, cur_rsi, cur_sma20, cur_sma50, cur_vol, cur_avg_vol, params
+            )
+            if signal == "BUY":
+                max_pct = params.get("max_position_pct", 25.0) / 100.0
+                invest_amount = state.cash * max_pct
+                shares = int(invest_amount / close)
+                if shares > 0 and state.cash >= shares * close:
+                    cost = shares * close
+                    state.cash -= cost
+                    state.positions[ticker] = Position(
+                        ticker=ticker, shares=shares, entry_price=close, entry_date=date_str
+                    )
+                    state.trade_count += 1
+                    state.trade_log.append({
+                        "date": date_str, "action": "BUY", "price": close,
+                        "shares": shares, "pnl": 0, "reason": "entry",
+                        "ticker": ticker,
+                    })
+
+    # Record portfolio value snapshot
+    pv = state.cash + sum(
+        p.shares * close for p in state.positions.values()
+    )
+    state.portfolio_value_history.append({"date": date_str, "value": round(pv, 2)})
+
+    return state
+
+
+def _close_remaining_positions(state: SimState, final_close: float, final_date: str) -> SimState:
+    """Close all open positions at the end of simulation."""
+    for ticker_key in list(state.positions.keys()):
+        pos = state.positions[ticker_key]
+        proceeds = pos.shares * final_close
+        pnl = proceeds - (pos.shares * pos.entry_price)
+        state.cash += proceeds
+        state.cumulative_realized_pnl += pnl
+        state.trade_count += 1
+        state.trade_log.append({
+            "date": final_date, "action": "SELL", "price": final_close,
+            "shares": pos.shares, "pnl": round(pnl, 2), "reason": "close",
+            "ticker": ticker_key,
+        })
+        del state.positions[ticker_key]
+    return state
+
+
+def run_backtest_carryover(
+    ticker: str,
+    trader_type: str,
+    params: dict[str, Any],
+    period: str = "3mo",
+    initial_capital: float = 100_000.0,
+    initial_state: Optional[SimState] = None,
+) -> SimState:
+    """Run a multi-day backtest with state carried across days.
+
+    Unlike backtest_trader() which resets state each invocation, this function
+    accepts and returns a SimState, allowing callers to:
+      - Save/restore state mid-simulation
+      - Inspect state after any trading day
+      - Resume from a previous state
+
+    Args:
+        ticker: The ticker symbol to trade.
+        trader_type: Which strategy to use ("stonks", "aldridge", "kairos").
+        params: Trading parameters dict.
+        period: yfinance period string (default "3mo").
+        initial_capital: Starting cash if creating fresh state.
+        initial_state: Optional pre-existing state to resume from.
+
+    Returns:
+        Final SimState after processing all days.
+    """
+    data = _prepare_market_data(ticker, period)
+    if data is None:
+        raise ValueError(f"Failed to download or insufficient data for {ticker}")
+
+    indicators = _compute_indicators(data)
+
+    if initial_state is not None:
+        state = initial_state.clone()
+    else:
+        state = create_initial_state(initial_capital, trader_type, params,
+                                     current_date=str(data.index[0].date()))
+
+    start_idx = max(20, 0)  # skip warm-up
+    for i in range(start_idx, len(data)):
+        _step_day(state, data.index[i], indicators, i)
+
+    # Close any remaining position
+    final_close = float(indicators["close"].iloc[-1])
+    final_date = str(data.index[-1].date())
+    _close_remaining_positions(state, final_close, final_date)
+
+    return state
+
+
+def compute_metrics_from_state(state: SimState) -> dict[str, Any]:
+    """Compute performance metrics from a final SimState.
+
+    Returns same metric dict shape as backtest_trader() for compatibility.
+    """
+    total_return_pct = ((state.cash - state.initial_capital) / state.initial_capital) * 100
+
+    pv_list = [v["value"] for v in state.portfolio_value_history]
+    pv_series = pd.Series(pv_list)
+
+    daily_returns = pv_series.pct_change().dropna()
+
+    sharpe = np.nan
+    if len(daily_returns) > 1 and daily_returns.std() > 0 and not daily_returns.empty:
+        sharpe = float((daily_returns.mean() / daily_returns.std()) * np.sqrt(252))
+
+    cum_max = pv_series.cummax()
+    drawdowns = (pv_series - cum_max) / cum_max
+    max_dd = float(drawdowns.min() * 100) if len(drawdowns) > 0 else 0.0
+
+    closed_trades = [t for t in state.trade_log if t["action"] == "SELL"]
+    wins = [t for t in closed_trades if t["pnl"] > 0]
+    win_rate = (len(wins) / len(closed_trades) * 100) if closed_trades else 0.0
+
+    gross_profit = sum(t["pnl"] for t in closed_trades if t["pnl"] > 0)
+    gross_loss = abs(sum(t["pnl"] for t in closed_trades if t["pnl"] < 0))
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0)
+
+    return {
+        "total_return": round(total_return_pct, 2),
+        "sharpe": round(sharpe, 3) if not (isinstance(sharpe, float) and np.isnan(sharpe)) else "N/A",
+        "max_drawdown": round(max_dd, 2),
+        "win_rate": round(win_rate, 1),
+        "num_trades": len(closed_trades),
+        "profit_factor": round(profit_factor, 2),
+        "final_cash": round(state.cash, 2),
+        "cumulative_realized_pnl": round(state.cumulative_realized_pnl, 2),
+        "trade_log": state.trade_log,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +943,95 @@ def cmd_improve(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# CLI — backtest
+# ---------------------------------------------------------------------------
+def cmd_backtest(args: argparse.Namespace) -> int:
+    """Execute a backtest run with optional carry-over state."""
+    trader_type = args.trader.lower()
+    ticker = args.ticker.upper()
+
+    # Use default params
+    schemas = TRADER_PARAM_SCHEMAS.get(trader_type, [])
+    params = {sp.name: sp.default for sp in schemas}
+
+    print(f"\n{'='*70}")
+    print(f"  BACKTEST — {trader_type.upper()} on {ticker}")
+    print(f"  Period: {args.period}  |  Capital: ${args.capital:,.0f}")
+    print(f"  Carry-over: {'YES' if args.carryover else 'NO (single-pass)'}")
+    print(f"{'='*70}\n")
+
+    # Load state if resuming
+    initial_state = None
+    if args.load_state:
+        load_path = Path(args.load_state)
+        if not load_path.exists():
+            print(f"ERROR: state file not found: {load_path}", file=sys.stderr)
+            return 1
+        with open(load_path) as f:
+            initial_state = SimState.deserialize(f.read())
+        print(f"  Loaded state from {load_path}")
+        print(f"    Cash: ${initial_state.cash:,.2f}")
+        print(f"    Positions: {len(initial_state.positions)}")
+        print(f"    Cumulative P&L: ${initial_state.cumulative_realized_pnl:+,.2f}")
+        print()
+
+    start_time = time.time()
+
+    if args.carryover or args.load_state or args.save_state:
+        # Carry-over mode: state threaded across days
+        state = run_backtest_carryover(
+            ticker=ticker,
+            trader_type=trader_type,
+            params=params,
+            period=args.period,
+            initial_capital=args.capital,
+            initial_state=initial_state,
+        )
+        metrics = compute_metrics_from_state(state)
+        elapsed = time.time() - start_time
+
+        print(f"  Completed in {elapsed:.1f}s")
+        print(f"\n  RESULTS:")
+        print(f"    Total Return:      {metrics['total_return']:+.2f}%")
+        print(f"    Sharpe:            {metrics['sharpe']}")
+        print(f"    Max Drawdown:      {metrics['max_drawdown']:+.2f}%")
+        print(f"    Win Rate:          {metrics['win_rate']:.1f}%")
+        print(f"    Trades:            {metrics['num_trades']}")
+        print(f"    Profit Factor:     {metrics['profit_factor']:.2f}")
+        print(f"    Realized P&L:      ${metrics['cumulative_realized_pnl']:+,.2f}")
+        print(f"    Final Cash:        ${metrics['final_cash']:,.2f}")
+
+        # Save state if requested
+        if args.save_state:
+            save_path = Path(args.save_state)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(save_path, "w") as f:
+                f.write(state.serialize())
+            print(f"\n  State saved to {save_path}")
+    else:
+        # Legacy mode: single-pass (no state threading)
+        result = backtest_trader(ticker, trader_type, params, period=args.period, initial_cash=args.capital)
+        elapsed = time.time() - start_time
+
+        if "error" in result:
+            print(f"  ERROR: {result['error']}")
+            return 1
+
+        print(f"  Completed in {elapsed:.1f}s")
+        print(f"\n  RESULTS:")
+        print(f"    Total Return:      {result['total_return']:+.2f}%")
+        print(f"    Sharpe:            {result['sharpe']}")
+        print(f"    Max Drawdown:      {result['max_drawdown']:+.2f}%")
+        print(f"    Win Rate:          {result['win_rate']:.1f}%")
+        print(f"    Trades:            {result['num_trades']}")
+        print(f"    Profit Factor:     {result['profit_factor']:.2f}")
+        print(f"    Final Cash:        ${result['final_cash']:,.2f}")
+
+    print(f"\n{'='*70}\n")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> int:
@@ -571,10 +1043,21 @@ def main(argv: list[str] | None = None) -> int:
 
     add_improve_subparser(subparsers)
 
-    # Future subcommands (stubs)
-    bp = subparsers.add_parser("backtest", help="Single backtest run (not implemented)")
-    bp.add_argument("--trader", required=True)
-    bp.add_argument("--ticker", required=True)
+    # Backtest subcommand (carry-over enabled)
+    bp = subparsers.add_parser("backtest", help="Run historical backtest with carry-over state")
+    bp.add_argument("--trader", required=True, choices=list(TRADER_PARAM_SCHEMAS.keys()),
+                    help="Trader personality")
+    bp.add_argument("--ticker", required=True, help="Ticker symbol (e.g. AAPL)")
+    bp.add_argument("--period", default="3mo", help="Historical period (default: 3mo)")
+    bp.add_argument("--capital", type=float, default=100_000.0,
+                    help="Initial capital (default: 100000)")
+    bp.add_argument("--carryover", action="store_true",
+                    help="Use carry-over state (thread state across days)")
+    bp.add_argument("--save-state", type=str, default=None,
+                    help="Path to save final SimState as JSON")
+    bp.add_argument("--load-state", type=str, default=None,
+                    help="Path to load initial SimState from JSON")
+
     cp = subparsers.add_parser("compare", help="Compare traders (not implemented)")
     cp.add_argument("--tickers", required=True)
 
@@ -583,8 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "improve":
         return cmd_improve(args)
     elif args.mode == "backtest":
-        print("backtest mode not yet implemented", file=sys.stderr)
-        return 1
+        return cmd_backtest(args)
     elif args.mode == "compare":
         print("compare mode not yet implemented", file=sys.stderr)
         return 1
