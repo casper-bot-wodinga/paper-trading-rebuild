@@ -486,25 +486,28 @@ def cmd_findings(args):
         if "sweep_results" in table_names:
             query = "SELECT * FROM sweep_results"
             params = []
+            conditions = []
             if trader:
-                query += " WHERE trader = ?"
+                conditions.append("trader = ?")
                 params.append(trader)
-            query += " ORDER BY timestamp DESC LIMIT 50"
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY timestamp DESC, sharpe DESC LIMIT 30"
 
             rows = cur.execute(query, params).fetchall()
             if rows:
                 print(f"  Found {len(rows)} sweep result(s):\n")
                 for r in rows:
-                    print(f"  [{r['timestamp'][:19]}] {r['trader']}:")
-                    print(f"    Scenarios: {r['total_scenarios']}")
-                    print(f"    Best score: {r['best_score']}")
-                    print(f"    Best variant: {r['best_variant_id']}")
-                    if r['best_params']:
+                    ts = r['timestamp'][:19] if r['timestamp'] else '?'
+                    print(f"  [{ts}] {r['trader']} on {r['ticker']} (variant {r['variant_id']}):")
+                    print(f"    Return: {r['total_return_pct']:+.2f}% | Sharpe: {r['sharpe']:.4f} | MaxDD: {r['max_drawdown_pct']:.2f}%")
+                    print(f"    Trades: {r['n_trades']} | WR: {r['win_rate']*100:.0f}% | PF: {r['profit_factor']:.2f}")
+                    if r['params']:
                         try:
-                            bp = json.loads(r['best_params'])
-                            print(f"    Best params: {bp}")
+                            bp = json.loads(r['params'])
+                            print(f"    Params: {bp}")
                         except (json.JSONDecodeError, TypeError):
-                            print(f"    Best params: {r['best_params']}")
+                            print(f"    Params: {r['params']}")
                     print()
             else:
                 print(f"  No sweep results found{ ' for ' + trader if trader else ''}.")
