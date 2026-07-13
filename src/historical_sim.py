@@ -206,12 +206,12 @@ def run_backtest(
         bar = bars[i]
         price = bar["close"]
         rsi_val = rsi[i]
+        equity = cash + position * price
+        high_water_mark = max(high_water_mark, equity)
 
         # Update trailing stop if in position
         if position > 0:
             mkt_val = position * price
-            equity = cash + mkt_val
-            high_water_mark = max(high_water_mark, equity)
 
             # Check trailing stop
             if trailing_stop_pct > 0:

@@ -141,8 +141,80 @@ except ImportError:
     fetch_stocktwits_sentiment = None
     fetch_reddit_via_search = None
     fetch_reddit_via_chrome = None
-    _simple_sentiment = lambda text: 0.0
-    log.warning("social_sentiment module not available — /social endpoint will be degraded")
+    # Built-in keyword sentiment analyzer (VADER-compatible word lists)
+    # Used when the full social_sentiment module is not installed
+    _SENTIMENT_POSITIVE = {
+        "bullish", "surge", "surged", "soar", "soared", "rally", "rallied",
+        "upgrade", "upgraded", "outperform", "beat", "beats", "exceed",
+        "exceeded", "strong", "growth", "profit", "profits", "record",
+        "breakout", "boom", "innovation", "leader", "leading", "optimistic",
+        "positive", "momentum", "gains", "gain", "rising", "rise",
+        "rebound", "recovery", "opportunity", "opportunities", "dividend",
+        "dividends", "buyback", "expansion", "expand", "approved",
+        "breakthrough", "partnership", "launch", "success", "successful",
+        "confidence", "confident", "outlook", "upside", "potential",
+        "bargain", "undervalued", "overweight", "overweighted", "accumulate",
+        "adding", "boost", "boosts", "skyrocket", "skyrocketed", "jump",
+        "jumped", "pop", "spike", "spiked", "green", "profitability",
+        "efficient", "efficiency", "upgrade", "raised", "raising",
+        "target", "increase", "increased", "increasing", "outperform",
+    }
+    _SENTIMENT_NEGATIVE = {
+        "bearish", "plunge", "plunged", "crash", "crashed", "slump", "slumped",
+        "downgrade", "downgraded", "underperform", "miss", "misses", "missed",
+        "decline", "declined", "weak", "weakness", "loss", "losses", "debt",
+        "liability", "risk", "risky", "volatile", "volatility", "uncertainty",
+        "negative", "downturn", "recession", "inflation", "layoff", "layoffs",
+        "cut", "cuts", "cutting", "sell", "selling", "sold", "dump",
+        "dumped", "short", "shorted", "bear", "collapse", "collapsed",
+        "bankrupt", "bankruptcy", "fraud", "investigation", "fine", "fined",
+        "lawsuit", "penalty", "sanction", "deficit", "declining", "slowdown",
+        "struggle", "struggling", "red", "warning", "warn", "warned",
+        "downgrade", "underweight", "reduce", "selling", "pressure",
+        "concern", "concerning", "worst", "fail", "failed", "failure",
+        "drop", "dropped", "fall", "fallen", "fell", "lower", "lowered",
+        "downgrade", "downgraded", "decrease", "decreased", "tightening",
+    }
+    _SENTIMENT_INTENSIFIERS = {
+        "very", "extremely", "highly", "strongly", "significantly",
+        "substantially", "massively", "dramatically", "sharply", "deeply",
+        "severely", "major", "majorly", "big", "huge", "enormous",
+        "massive", "incredible", "extraordinary", "record", "all-time",
+        "tremendous", "immense", "unprecedented", "historic",
+    }
+
+    def _simple_sentiment(text: str) -> float:
+        """Rule-based keyword sentiment for VADER-compatible compound score."""
+        if not text:
+            return 0.0
+        import re
+        words = re.findall(r"[a-zA-Z]+", text.lower())
+        if not words:
+            return 0.0
+        score = 0.0
+        n_matched = 0
+        for i, w in enumerate(words):
+            multiplier = 1.0
+            # Check if preceded by an intensifier
+            if i > 0 and words[i - 1] in _SENTIMENT_INTENSIFIERS:
+                multiplier = 1.5
+            # Check for negation
+            if i > 0 and words[i - 1] in {"not", "no", "never", "neither", "nor"}:
+                multiplier = -1.0
+            if w in _SENTIMENT_POSITIVE:
+                score += 0.3 * multiplier
+                n_matched += 1
+            elif w in _SENTIMENT_NEGATIVE:
+                score -= 0.3 * multiplier
+                n_matched += 1
+        if n_matched == 0:
+            return 0.0
+        # Normalize to [-1, 1]
+        avg = score / n_matched
+        # Clip
+        return max(-1.0, min(1.0, avg))
+
+    log.info("Built-in keyword sentiment analyzer loaded (social_sentiment module not available)")
 
 # Reddit pipeline (RSS-based, no auth required)
 try:
@@ -613,6 +685,90 @@ def _fetch_alpaca_crypto(symbols: List[str]) -> Dict[str, dict]:
     except Exception as e:
         log.warning("Crypto quotes fetch failed: %s", e)
         return {}
+
+
+def _fetch_alpaca_historical_bars(
+    symbols: List[str],
+    start_date: str,
+    end_date: str,
+    interval: str = "daily",
+) -> Dict[str, List[dict]]:
+    """Fetch historical OHLCV bars from Alpaca.
+
+    Fetches historical bar data via Alpaca StockHistoricalDataClient.
+    Used by the /bars endpoint for backtesting and parameter sweeps.
+
+    Args:
+        symbols: List of ticker symbols.
+        start_date: ISO start date (e.g. "2026-06-01").
+        end_date: ISO end date (e.g. "2026-07-02").
+        interval: "daily" or "intraday".
+
+    Returns:
+        Dict mapping ticker -> list of OHLCV bar dicts.
+    """
+    if not symbols:
+        return {}
+
+    try:
+        client = _get_alpaca_data_client()
+        if client is None:
+            log.warning("Cannot fetch historical bars: no Alpaca client")
+            return {}
+
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        from alpaca.data.enums import DataFeed
+        import pandas as pd
+
+        # Parse dates
+        try:
+            start_ts = pd.Timestamp(start_date, tz="America/New_York")
+            end_ts = pd.Timestamp(end_date, tz="America/New_York") + pd.Timedelta(days=1)
+        except Exception as e:
+            log.warning("Invalid date params: %s", e)
+            return {}
+
+        # Choose timeframe
+        if interval == "daily":
+            timeframe = TimeFrame(1, TimeFrameUnit.Day)
+        else:
+            timeframe = TimeFrame(30, TimeFrameUnit.Minute)
+
+        request_params = StockBarsRequest(
+            symbol_or_symbols=list(symbols),
+            timeframe=timeframe,
+            start=start_ts.isoformat(),
+            end=end_ts.isoformat(),
+            feed=DataFeed.IEX,
+        )
+
+        bars = client.get_stock_bars(request_params)
+        result: Dict[str, List[dict]] = {}
+
+        for sym in symbols:
+            sym_bars = bars.data.get(sym, [])
+            if not sym_bars:
+                continue
+            bar_list = []
+            for b in sym_bars:
+                bar_list.append({
+                    "timestamp": b.timestamp.isoformat(),
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": b.volume,
+                })
+            result[sym] = bar_list
+
+        log.info("Fetched historical bars for %d/%d symbols (%s-%s, %s)",
+                 len(result), len(symbols), start_date, end_date, interval)
+        return result
+    except Exception as e:
+        log.warning("Alpaca historical bars failed: %s", e)
+        return {}
+
 
 
 def _fetch_fundamentals(symbol: str) -> Optional[dict]:
@@ -1991,6 +2147,77 @@ def quotes():
     return jsonify({"quotes": result, "cached": len(result) - len(missing) if missing else len(result), "fetched_live": len(missing)})
 
 
+# ── Bars (Historical OHLCV) ──────────────────────────────────────────────────
+
+
+@app.route("/bars")
+def historical_bars():
+    """Fetch historical OHLCV bars for backtesting and parameter sweeps.
+
+    GET /bars?symbols=AAPL,MSFT&interval=daily&start_date=2026-06-01&end_date=2026-07-02
+
+    Fetches from Alpaca StockHistoricalDataClient if available.
+    Cached for 1 hour.
+
+    Args:
+        symbols: Comma-separated tickers.
+        interval: "daily" or "intraday" (default: "daily").
+        start_date: ISO date (default: 30 days ago).
+        end_date: ISO date (default: today).
+
+    Returns:
+        JSON with "symbols" key mapping ticker -> list of bar dicts.
+    """
+    symbols_str = request.args.get("symbols", "")
+    if not symbols_str:
+        return jsonify({"error": "symbols parameter required (comma-separated)"}), 400
+
+    symbols = [s.strip().upper() for s in symbols_str.split(",") if s.strip()]
+    if not symbols:
+        return jsonify({"error": "no valid symbols"}), 400
+
+    interval = request.args.get("interval", "daily").strip().lower()
+    start_date = request.args.get("start_date", "")
+    end_date = request.args.get("end_date", "")
+
+    # Default date range: last 30 days
+    if not start_date:
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    if not end_date:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Check cache first
+    cache_keys = [f"bars:{s}:{interval}:{start_date}:{end_date}" for s in symbols]
+    cached = _cache.get_multi(cache_keys, ttl_seconds=3600)
+    result = {}
+    missing = []
+
+    for sym in symbols:
+        key = f"bars:{sym}:{interval}:{start_date}:{end_date}"
+        if key in cached:
+            result[sym] = cached[key]
+        else:
+            missing.append(sym)
+
+    if missing:
+        fresh = _fetch_alpaca_historical_bars(missing, start_date, end_date, interval)
+        for sym, bars in fresh.items():
+            result[sym] = bars
+            _cache.set(f"bars:{sym}:{interval}:{start_date}:{end_date}", bars)
+        for sym in missing:
+            if sym not in result:
+                result[sym] = []
+
+    return jsonify({
+        "symbols": result,
+        "cached": len(result) - len(missing),
+        "fetched": len(missing),
+        "interval": interval,
+        "start_date": start_date,
+        "end_date": end_date,
+    })
+
+
 # ── Crypto ────────────────────────────────────────────────────────────────────
 
 @app.route("/crypto")
@@ -2152,7 +2379,17 @@ def sentiment():
         return jsonify({"symbol": symbol, "sentiment": cached, "source": "cache"})
 
     # Cache miss — try live analysis
-    result = _fetch_sentiment_via_finbert(symbol, symbol)
+    # First try fetching news headlines for better keyword analysis
+    news_analysis = None
+    for news_key in [f"news:{symbol}:10", f"news:{symbol}:5", "news:all:20"]:
+        news_text = _cache.get(news_key, TTL["news"])
+        if news_text and isinstance(news_text, list):
+            headlines = [n.get("headline", "") for n in news_text[:5] if n.get("headline", "")]
+            if headlines:
+                combined = " ".join(headlines)
+                news_analysis = _fetch_sentiment_via_finbert(combined, ticker=symbol)
+                break
+    result = news_analysis or _fetch_sentiment_via_finbert(symbol, symbol)
     if result:
         # Normalize to VADER-compatible format (compound/positive/negative/neutral)
         # FinBERT returns {sentiment_score, label, confidence} which is a
