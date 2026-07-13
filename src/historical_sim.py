@@ -420,31 +420,39 @@ def cmd_sweep(args):
 def cmd_backtest(args):
     """Run a single backtest."""
     trader = args.trader
-    ticker = args.ticker.upper() if args.ticker else "AAPL"
+    tickers_str = args.ticker.upper() if args.ticker else "AAPL"
+    tickers = [t.strip() for t in tickers_str.split(",")]
     days = args.days or 30
 
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     print(f"\n{'='*60}")
-    print(f"  📈 BACKTEST: {trader} on {ticker}")
+    print(f"  📈 BACKTEST: {trader} on {tickers}")
     print(f"  Range: {start_date} to {end_date}")
     print(f"  Source: {DATA_BUS_URL}/bars")
     print(f"{'='*60}\n")
 
-    bar_data = fetch_bars_from_databus([ticker], start_date, end_date, interval="daily")
-    bars = bar_data.get(ticker, [])
-    if not bars:
-        print(f"  ❌ No data returned for {ticker}")
+    all_results = []
+    for ticker in tickers:
+        bar_data = fetch_bars_from_databus([ticker], start_date, end_date, interval="daily")
+        bars = bar_data.get(ticker, [])
+        if not bars:
+            print(f"  ⚠️ No data returned for {ticker}")
+            continue
+
+        print(f"  {ticker}: Loaded {len(bars)} bars")
+
+        # Use default params for trader
+        schema = TRADER_PARAM_SCHEMAS.get(trader, TRADER_PARAM_SCHEMAS["kairos"])
+        params = {p["name"]: p["default"] for p in schema}
+        result = run_backtest(bars, ticker, trader, params)
+        _print_result(result, 0)
+        all_results.append((ticker, result))
+
+    if not all_results:
+        print(f"  ❌ No data returned for any ticker")
         return 1
-
-    print(f"  Loaded {len(bars)} bars\n")
-
-    # Use default params for trader
-    from src.historical_sim import TRADER_PARAM_SCHEMAS
-    params = {p.name: p.default for p in TRADER_PARAM_SCHEMAS.get(trader, [])}
-    result = run_backtest(bars, ticker, trader, params)
-    _print_result(result, 0)
 
     return 0
 
