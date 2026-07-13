@@ -54,7 +54,7 @@ import signal
 import threading
 import argparse
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 from typing import Dict, List, Optional, Any, Set, Tuple
@@ -109,6 +109,16 @@ signal.signal(signal.SIGTERM, _on_signal)
 from dotenv import load_dotenv
 load_dotenv(Path.home() / ".openclaw" / ".env", override=True)
 from src.db import dual_writer
+
+# ── News collector (RSS aggregation) ──────────────────────────────────────────
+try:
+    from src.news_collector import start_news_collector, ensure_news_cache_table
+    _HAS_NEWS_COLLECTOR = True
+except ImportError:
+    start_news_collector = None  # type: ignore
+    ensure_news_cache_table = None  # type: ignore
+    _HAS_NEWS_COLLECTOR = False
+    log.warning("news_collector module not available — /news-cache, /news/search endpoints will be disabled")
 
 # ── Combo fetch imports ──────────────────────────────────────────────────────
 try:
@@ -2554,6 +2564,154 @@ def news():
             }
             _write_queue.enqueue("news", news_row)
     return jsonify({"symbol": symbol or "all", "news": data, "source": "alpaca"})
+
+
+# ── News Cache (RSS Feed Aggregation) ────────────────────────────────────────
+
+@app.route("/news-cache")
+def news_cache_feed():
+    """
+    GET /news-cache?limit=30&source=marketwatch&days=1
+
+    General news feed from the RSS-collected news_cache table.
+    Read-only from Postgres cache — no live fetching.
+
+    Params:
+        limit  — max articles (default 30)
+        source — filter by source name (optional)
+        days   — how many days back (default 1)
+
+    Returns:
+        {"news": [...], "count": N, "total": N}
+    """
+    limit = int(request.args.get("limit", 30))
+    source = request.args.get("source", "").strip()
+    days = int(request.args.get("days", 1))
+
+    cache_key = f"news-cache:{source or 'all'}:{limit}:{days}"
+    cached = _cache.get(cache_key, TTL["news"])
+    if cached is not None:
+        return jsonify({"news": cached, "count": len(cached), "source": "cache"})
+
+    import psycopg2
+    import psycopg2.extras
+
+    db_url = "postgresql://trader:@192.168.1.179:5433/trading"
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    where_parts = ["published_at >= %s::timestamptz"]
+    params = [cutoff]
+
+    if source:
+        where_parts.append("source = %s")
+        params.append(source)
+
+    where = " AND ".join(where_parts)
+
+    try:
+        conn = psycopg2.connect(db_url, connect_timeout=5)
+        conn.set_session(readonly=True)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""SELECT id, url, title, summary, source, published_at, collected_at,
+                           tickers, sentiment_score
+                    FROM public.news_cache
+                    WHERE {where}
+                    ORDER BY published_at DESC
+                    LIMIT %s""",
+                params + [limit],
+            )
+            rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        log.warning("news_cache query failed: %s", e)
+        return jsonify({"news": [], "count": 0, "error": str(e)}), 500
+
+    articles = []
+    for row in rows:
+        articles.append({
+            "id": row["id"],
+            "url": row["url"],
+            "title": row["title"],
+            "summary": row["summary"],
+            "source": row["source"],
+            "published_at": row["published_at"].isoformat() if hasattr(row["published_at"], "isoformat") else str(row["published_at"]),
+            "collected_at": row["collected_at"].isoformat() if hasattr(row["collected_at"], "isoformat") else str(row["collected_at"]),
+            "tickers": row["tickers"] if row["tickers"] else [],
+            "sentiment_score": float(row["sentiment_score"]) if row["sentiment_score"] else 0.0,
+        })
+
+    _cache.set(cache_key, articles)
+    return jsonify({"news": articles, "count": len(articles)})
+
+
+@app.route("/news/search")
+def news_search():
+    """
+    GET /news/search?q=AAPL&limit=20
+
+    Simple text search on news article title + summary.
+    Uses Postgres ILIKE for substring matching.
+
+    Params:
+        q      — search query (required)
+        limit  — max results (default 20)
+
+    Returns:
+        {"news": [...], "count": N, "query": q}
+    """
+    q = request.args.get("q", "").strip()
+    limit = int(request.args.get("limit", 20))
+
+    if not q:
+        return jsonify({"news": [], "count": 0, "error": "q parameter required"}), 400
+
+    cache_key = f"news-search:{q}:{limit}"
+    cached = _cache.get(cache_key, TTL["news"])
+    if cached is not None:
+        return jsonify({"news": cached, "count": len(cached), "query": q, "source": "cache"})
+
+    import psycopg2
+    import psycopg2.extras
+
+    db_url = "postgresql://trader:@192.168.1.179:5433/trading"
+    search_pattern = f"%{q}%"
+
+    try:
+        conn = psycopg2.connect(db_url, connect_timeout=5)
+        conn.set_session(readonly=True)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, url, title, summary, source, published_at, collected_at,
+                           tickers, sentiment_score
+                    FROM public.news_cache
+                    WHERE title ILIKE %s OR summary ILIKE %s
+                    ORDER BY published_at DESC
+                    LIMIT %s""",
+                (search_pattern, search_pattern, limit),
+            )
+            rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        log.warning("news_search query failed: %s", e)
+        return jsonify({"news": [], "count": 0, "error": str(e)}), 500
+
+    articles = []
+    for row in rows:
+        articles.append({
+            "id": row["id"],
+            "url": row["url"],
+            "title": row["title"],
+            "summary": row["summary"],
+            "source": row["source"],
+            "published_at": row["published_at"].isoformat() if hasattr(row["published_at"], "isoformat") else str(row["published_at"]),
+            "collected_at": row["collected_at"].isoformat() if hasattr(row["collected_at"], "isoformat") else str(row["collected_at"]),
+            "tickers": row["tickers"] if row["tickers"] else [],
+            "sentiment_score": float(row["sentiment_score"]) if row["sentiment_score"] else 0.0,
+        })
+
+    _cache.set(cache_key, articles)
+    return jsonify({"news": articles, "count": len(articles), "query": q})
 
 
 # ── Social ────────────────────────────────────────────────────────────────────
@@ -6067,6 +6225,16 @@ def main():
     for s in _schedulers:
         s.start()
 
+    # Start news collector (RSS aggregation daemon)
+    if _HAS_NEWS_COLLECTOR and start_news_collector:
+        try:
+            ensure_news_cache_table()
+        except Exception as e:
+            log.warning("Could not ensure news_cache table: %s", e)
+        start_news_collector()
+    else:
+        log.warning("News collector not available — skipping")
+
     log.info("Data Bus starting on %s:%s", args.host, args.port)
     log.info("Tracked symbols: %s", sorted(_tracked_symbols)[:10])
     log.info("Endpoints:")
@@ -6102,6 +6270,8 @@ def main():
     log.info("  GET  /technical-scan?symbol=AAPL  (NEW)")
     log.info("  GET  /equity-analysis?symbol=AAPL  (NEW)")
     log.info("  GET  /briefing")
+    log.info("  GET  /news-cache?limit=30&source=marketwatch&days=1  (NEW — RSS news feed)")
+    log.info("  GET  /news/search?q=AAPL  (NEW — search news cache)")
     log.info("")
     log.info("MCP Tools (port %d — SSE transport):", _mcp_port)
     log.info("  get_quotes(symbols)")
