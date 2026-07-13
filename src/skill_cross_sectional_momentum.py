@@ -170,10 +170,31 @@ def get_cached_momentum_signal(top_n: int = 10) -> Optional[Dict[str, Any]]:
         np.mean([r.get("z_score", 0) for r in ranked]), 2
     ) if ranked else 0.0
 
+    # Compute richer context: top-quartile z-score, distribution stats
+    roc_values = [r.get("roc_pct", 0) for r in ranked]
+    z_values = [r.get("z_score", 0) for r in ranked]
+    top_q = ranked[:max(1, len(ranked) // 4)]
+    avg_top_z = round(
+        np.mean([r.get("z_score", 0) for r in top_q]), 2
+    ) if top_q else 0.0
+    pct_positive = round(
+        sum(1 for r in ranked if r.get("roc_pct", 0) > 0) / max(len(ranked), 1), 4
+    )
+
     signal = {
         "market_regime": market_regime,
         "num_ranked": len(ranked),
         "avg_composite_z": avg_composite_z,
+        "avg_top_quartile_z": avg_top_z,
+        "pct_positive_roc": pct_positive,
+        "z_score_range": {
+            "min": round(min(z_values), 2) if z_values else 0.0,
+            "max": round(max(z_values), 2) if z_values else 0.0,
+        },
+        "roc_distribution": {
+            "mean": round(np.mean(roc_values), 4) if roc_values else 0.0,
+            "std": round(np.std(roc_values), 4) if roc_values else 0.0,
+        },
         "ranked": ranked[:top_n],
         "_fetched_at": now,
     }

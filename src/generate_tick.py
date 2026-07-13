@@ -125,9 +125,15 @@ def get_market_context() -> str:
         regime = momentum.get("market_regime", "")
         if regime:
             lines.append(f"- **Market Regime**: {regime}")
-        avg_z = momentum.get("avg_composite_z")
-        if avg_z is not None:
-            lines.append(f"- **Momentum Z-score**: {avg_z:.3f}")
+        avg_top_z = momentum.get("avg_top_quartile_z")
+        if avg_top_z is not None:
+            lines.append(f"- **Top Quartile Z-score**: {avg_top_z:+.2f} (momentum breadth)")
+        pct_pos = momentum.get("pct_positive_roc")
+        if pct_pos is not None:
+            lines.append(f"- **Stocks Positive**: {pct_pos:.0%}")
+        z_range = momentum.get("z_score_range")
+        if z_range and z_range.get("min") is not None and z_range.get("max") is not None:
+            lines.append(f"- **Z-score Range**: {z_range['min']:+.2f} to {z_range['max']:+.2f}")
 
     # Tracked symbols count
     health = fetch_json("/health")

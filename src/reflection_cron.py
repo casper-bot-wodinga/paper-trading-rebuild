@@ -471,7 +471,7 @@ def compute_trade_stats(trades: List[dict], signals: Optional[Dict[int, List[dic
         }
 
     # ── Suggestions ────────────────────────────────────────────────────
-    suggestions = _generate_suggestions(today_stats, rolling_stats, by_signal_rates, by_sector_rates, confidence_calibration)
+    suggestions = _generate_suggestions(today_stats, rolling_stats, by_signal_rates, by_sector_rates, confidence_calibration, trades)
 
     return {
         "today_stats": today_stats,
@@ -490,11 +490,138 @@ def _generate_suggestions(
     by_signal: Dict[str, dict],
     by_sector: Dict[str, dict],
     confidence_calibration: Dict[str, dict],
+    trades: List[dict] = None,
 ) -> List[str]:
-    """Generate actionable strategy suggestions based on stats."""
+    """Generate actionable strategy suggestions based on stats.
+
+    Enhanced suggestions include conviction threshold analysis,
+    sector concentration, hold time recommendations, and VIX-aware risk.
+    """
     suggestions = []
 
-    # Win rate trending down
+    # ── 1. Conviction threshold analysis ──────────────────────────────────
+    # Check if the agent is missing opportunities in the 0.4-0.6 range
+    if trades and confidence_calibration:
+        low_medium = confidence_calibration.get("low_0.3-0.5", {}).get("num_trades", 0) + \
+                     confidence_calibration.get("medium_0.5-0.7", {}).get("num_trades", 0)
+        high_conf = confidence_calibration.get("high_0.7-0.9", {}).get("num_trades", 0) + \
+                    confidence_calibration.get("very_high_>=0.9", {}).get("num_trades", 0)
+
+        total_with_conf = low_medium + high_conf
+
+        if total_with_conf > 0:
+            # Check if significant opportunities exist in the 0.4-0.6 range
+            medium_trades = confidence_calibration.get("medium_0.5-0.7", {})
+            low_trades = confidence_calibration.get("low_0.3-0.5", {})
+
+            mid_range_wr = None
+            if low_trades.get("num_trades", 0) >= 3:
+                mid_range_wr = low_trades["win_rate"]
+            elif medium_trades.get("num_trades", 0) >= 3:
+                mid_range_wr = medium_trades["win_rate"]
+
+            # If there are many more high-confidence trades than mid-range, suggest expanding
+            if high_conf > low_medium * 2 and low_medium >= 3:
+                mid_pct = int(low_medium / total_with_conf * 100)
+                suggestions.append(
+                    f"⚡ Your conviction threshold of 0.6 may be too high — you missed "
+                    f"{mid_pct}% of potential entries with confidence 0.4-0.6. "
+                    f"Consider lowering threshold to capture more opportunities."
+                )
+            elif mid_range_wr is not None and mid_range_wr > 0.5:
+                suggestions.append(
+                    f"⚡ Mid-confidence trades (0.4-0.6) show {mid_range_wr:.0%} win rate. "
+                    f"Consider lowering your conviction threshold from 0.6 to 0.5 "
+                    f"to capture more of these opportunities."
+                )
+
+    # ── 2. Sector concentration ───────────────────────────────────────────
+    if by_sector:
+        total_sectors = len(by_sector)
+        total_trades_count = sum(s["total"] for s in by_sector.values())
+
+        if total_sectors == 1:
+            sector_name = list(by_sector.keys())[0]
+            suggestions.append(
+                f"🎯 You only traded {sector_name} stocks. Consider scanning Healthcare, "
+                f"Consumer, and Financial sectors for diversification."
+            )
+        elif total_sectors <= 2 and total_trades_count >= 5:
+            sector_names = ", ".join(sorted(by_sector.keys()))
+            suggestions.append(
+                f"🎯 Your trades are concentrated in {sector_names}. "
+                f"Consider expanding watchlist to include other sectors for better diversification."
+            )
+
+        # Check if a single sector dominates
+        if total_sectors > 1:
+            top_sector = max(by_sector.items(), key=lambda x: x[1]["total"])
+            top_pct = int(top_sector[1]["total"] / total_trades_count * 100)
+            if top_pct > 70:
+                suggestions.append(
+                    f"🎯 {top_sector[0]} represents {top_pct}% of your trades. "
+                    f"Consider diversifying into other sectors to reduce concentration risk."
+                )
+
+    # ── 3. Average hold time analysis ─────────────────────────────────────
+    if today_stats and today_stats.get("num_trades", 0) > 0:
+        avg_hold_hours = today_stats.get("avg_hold_time_hours", 0)
+        if avg_hold_hours > 0 and avg_hold_hours < 0.05:  # Less than 3 minutes
+            suggestions.append(
+                f"⏱️ Your average hold time is {avg_hold_hours * 60:.0f} minutes. "
+                f"Consider using longer timeframes — very short holds may be "
+                f"capturing noise rather than signal."
+            )
+        elif avg_hold_hours > 0 and avg_hold_hours < 0.1:  # Less than 6 minutes
+            suggestions.append(
+                f"⏱️ Your average hold time is {avg_hold_hours * 60:.0f} minutes. "
+                f"Consider using longer timeframes (15-30 min bars) for more stable signals."
+            )
+
+    # ── 4. VIX / market regime check ──────────────────────────────────────
+    try:
+        import requests as req
+        vix_resp = req.get(
+            "http://localhost:5000/quotes?symbols=VIX",
+            timeout=5,
+        )
+        if vix_resp.status_code == 200:
+            vix_data = vix_resp.json()
+            vix_quotes = vix_data.get("quotes", {}) if isinstance(vix_data, dict) else {}
+            vix_price = None
+            if isinstance(vix_quotes, dict):
+                vix_entry = vix_quotes.get("VIX", {})
+                if isinstance(vix_entry, dict):
+                    vix_price = vix_entry.get("close") or vix_entry.get("price")
+            if vix_price is not None:
+                try:
+                    vix_val = float(vix_price)
+                    if vix_val > 30:
+                        suggestions.append(
+                            f"🌩️ VIX is {vix_val:.1f} (extreme fear). Your historical win rate "
+                            f"during high-VIX periods may be lower. Consider reducing position "
+                            f"sizes by 50% and tightening stop-losses."
+                        )
+                    elif vix_val > 20:
+                        # Check rolling win rate during this period
+                        wr = rolling_stats.get("last_10") if rolling_stats else None
+                        if wr is not None and wr < 0.4:
+                            suggestions.append(
+                                f"🌩️ VIX is {vix_val:.1f} (elevated). Your recent win rate is "
+                                f"{wr:.0%}. Consider reducing position sizes and focusing "
+                                f"on higher-conviction setups only."
+                            )
+                        else:
+                            suggestions.append(
+                                f"🌩️ VIX is {vix_val:.1f} (elevated). Consider reducing position "
+                                f"sizes by 25-50% and focusing on high-conviction setups."
+                            )
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass  # VIX check is best-effort
+
+    # ── Existing: Win rate trending down ───────────────────────────────────
     if rolling_stats.get("last_10") is not None and rolling_stats.get("last_50") is not None:
         if rolling_stats["last_10"] < rolling_stats["last_50"]:
             suggestions.append(
@@ -502,7 +629,7 @@ def _generate_suggestions(
                 f"vs last 50 ({rolling_stats['last_50']:.0%}). Consider reviewing recent signals."
             )
 
-    # Poor sector performance
+    # ── Existing: Poor sector performance ──────────────────────────────────
     for sector, stats in sorted(by_sector.items(), key=lambda x: x[1]["win_rate"]):
         if stats["total"] >= 3 and stats["win_rate"] < 0.3:
             suggestions.append(
@@ -510,7 +637,7 @@ def _generate_suggestions(
                 f"Consider reducing exposure or tightening entries in this sector."
             )
 
-    # Strong sector performance
+    # ── Existing: Strong sector performance ────────────────────────────────
     for sector, stats in sorted(by_sector.items(), key=lambda x: -x[1]["win_rate"]):
         if stats["total"] >= 3 and stats["win_rate"] > 0.7:
             suggestions.append(
@@ -518,7 +645,7 @@ def _generate_suggestions(
                 f"Consider increasing allocation."
             )
 
-    # Signal performance
+    # ── Existing: Signal performance ───────────────────────────────────────
     for sname, stats in sorted(by_signal.items(), key=lambda x: x[1]["win_rate"]):
         if stats["total"] >= 3 and stats["win_rate"] < 0.3:
             suggestions.append(
@@ -531,7 +658,7 @@ def _generate_suggestions(
                 f"Consider weighting this signal more heavily."
             )
 
-    # Confidence calibration
+    # ── Existing: Confidence calibration ───────────────────────────────────
     if confidence_calibration:
         high_conf_keys = [k for k in confidence_calibration if "0.7" in k or "0.9" in k]
         low_conf_keys = [k for k in confidence_calibration if "0.3" in k or "low" in k]
@@ -550,13 +677,13 @@ def _generate_suggestions(
                     f"The model might be under-confident in good setups."
                 )
 
-    # Low trade volume
+    # ── Existing: Low trade volume ─────────────────────────────────────────
     if today_stats and today_stats["num_trades"] == 0:
         suggestions.append("📭 No trades today. Check if agent is active and market conditions are favorable.")
     elif today_stats and today_stats["num_trades"] < 3:
         suggestions.append(f"📭 Only {today_stats['num_trades']} trades today. Consider expanding watchlist or lowering conviction threshold to increase activity.")
 
-    # P&L direction
+    # ── Existing: P&L direction ────────────────────────────────────────────
     if today_stats and today_stats["total_pnl"] < -50:
         suggestions.append(f"📉 Today's P&L: ${today_stats['total_pnl']:.2f}. Review stop-loss placement and position sizing.")
 

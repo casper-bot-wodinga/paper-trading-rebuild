@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.signals import SignalEngine, SignalParams, SignalReport
 from src.llm_engine import LLMEngine
 from src.prompt_builder import PromptBuilder, AgentFiles, DEFAULTS as PROMPT_DEFAULTS
+import numpy as np
 from src.replay import Tick, Portfolio, TraderDecision
 
 log = logging.getLogger("virtual_runner")
@@ -62,6 +63,7 @@ _config: Dict[str, Any] = {
     "max_parallel": int(os.getenv("VT_MAX_PARALLEL", "24")),
     "starting_cash": float(os.getenv("VT_STARTING_CASH", "10000")),
     "mock": int(os.getenv("VT_MOCK", "0")) == 1 or False,    # True to bypass network and generate fake data
+    "live": False,    # True to submit real orders to Alpaca paper trading
 }
 
 # Market hours (ET)
@@ -236,6 +238,62 @@ def load_virtual_traders(names: Optional[List[str]] = None) -> List[Dict[str, An
     return rows
 
 
+def _get_alpaca_trading_client(base_trader: str):
+    """Get an Alpaca TradingClient for the given base trader (paper).
+
+    Returns None if keys are unavailable.
+    """
+    try:
+        from alpaca.trading.client import TradingClient
+        key_env, secret_env = _ALPACA_KEYS.get(base_trader, (None, None))
+        if not key_env:
+            return None
+        from dotenv import load_dotenv
+        load_dotenv(Path.home() / ".openclaw" / ".env", override=True)
+        api_key = os.getenv(key_env)
+        secret = os.getenv(secret_env)
+        if not api_key or not secret:
+            return None
+        return TradingClient(api_key, secret, paper=True)
+    except Exception as e:
+        log.warning("Could not create Alpaca TradingClient: %s", e)
+        return None
+
+
+def _submit_alpaca_order(
+    client: "TradingClient",
+    ticker: str,
+    decision: str,
+    shares: int,
+    trader_id: str,
+) -> Optional[str]:
+    """Submit a market order to Alpaca paper trading.
+
+    Returns the Alpaca order ID on success, None on failure.
+    """
+    try:
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        side = OrderSide.BUY if decision == "BUY" else OrderSide.SELL
+        order_data = MarketOrderRequest(
+            symbol=ticker,
+            qty=shares if shares > 0 else 1,
+            side=side,
+            time_in_force=TimeInForce.DAY,
+        )
+        order = client.submit_order(order_data)
+        order_id = getattr(order, "id", str(uuid.uuid4()))
+        log.info(
+            "LIVE ORDER | trader=%s | ticker=%s | side=%s | shares=%d | order_id=%s",
+            trader_id, ticker, decision, shares, order_id,
+        )
+        return str(order_id)
+    except Exception as e:
+        log.warning("Alpaca order failed for %s %s: %s", trader_id, ticker, e)
+        return None
+
+
 def insert_trade(
     trader_id: str,
     ticker: str,
@@ -247,11 +305,14 @@ def insert_trade(
     shares: int = 0,
     regime: Optional[str] = None,
     signal_score: Optional[float] = None,
+    base_trader: Optional[str] = None,
 ):
     """Insert a trade decision into trading.trades.
 
     For BUY/SELL decisions we record the entry. P&L is computed later
     when the position is closed (by the live trader system or virtual_rotate).
+
+    When --live mode is active, also submits a real order to Alpaca paper trading.
     """
     if _config.get("mock"):
         trade_id = f"vt-mock-{uuid.uuid4().hex[:12]}"
@@ -266,6 +327,14 @@ def insert_trade(
     cur = conn.cursor()
     trade_id = f"vt-{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
+    alpaca_order_id = None
+
+    # If --live is active, submit real order to Alpaca
+    if _config.get("live") and base_trader and decision in ("BUY", "SELL"):
+        alpaca_client = _get_alpaca_trading_client(base_trader)
+        if alpaca_client:
+            live_shares = shares if shares > 0 else max(1, int(_config.get("starting_cash", 10000) * 0.05 / max(price, 0.01)))
+            alpaca_order_id = _submit_alpaca_order(alpaca_client, ticker, decision, live_shares, trader_id)
 
     cur.execute(
         """INSERT INTO trading.trades
@@ -282,16 +351,23 @@ def insert_trade(
             0.0,  # P&L computed on close
             0.0,  # return_pct computed on close
             regime,
-            trade_source,
+            f"{trade_source}_live" if alpaca_order_id else trade_source,
             now,
         ),
     )
     conn.close()
-    log.info(
-        "TRADE | trader=%s | ticker=%s | decision=%s | conv=%.2f | source=%s | signal=%.2f",
-        trader_id, ticker, decision, conviction, trade_source,
-        signal_score or 0.0,
-    )
+
+    if alpaca_order_id:
+        log.info(
+            "TRADE+LIVE | trader=%s | ticker=%s | decision=%s | conv=%.2f | source=%s | alpaca=%s",
+            trader_id, ticker, decision, conviction, trade_source, alpaca_order_id,
+        )
+    else:
+        log.info(
+            "TRADE | trader=%s | ticker=%s | decision=%s | conv=%.2f | source=%s | signal=%.2f",
+            trader_id, ticker, decision, conviction, trade_source,
+            signal_score or 0.0,
+        )
     return trade_id
 
 
@@ -432,6 +508,128 @@ def quotes_to_ticks(
     return ticks
 
 
+# ── Signal pre-warming ──────────────────────────────────────────────────────
+
+def fetch_bars_for_ticks(symbols: List[str], days: int = 60) -> Dict[str, List[dict]]:
+    """Fetch daily bars from data bus to pre-warm signal engines."""
+    if not symbols:
+        return {}
+    try:
+        from datetime import datetime as dt, timedelta
+        end = dt.now().strftime("%Y-%m-%d")
+        start = (dt.now() - timedelta(days=days + 5)).strftime("%Y-%m-%d")
+        url = f"{_config['data_bus_url']}/bars?symbols={','.join(symbols)}&interval=daily&start_date={start}&end_date={end}"
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("symbols", {})
+    except Exception as e:
+        log.debug("Could not fetch bars for signal pre-warm: %s", e)
+        return {}
+
+
+def prewarm_signal_engine(
+    engine: SignalEngine,
+    bars: Dict[str, List[dict]],
+    ticker: str,
+) -> None:
+    """Feed historical bars into the signal engine so indicators have data."""
+    ticker_bars = bars.get(ticker, [])
+    if not ticker_bars:
+        return
+    from src.replay import Tick as _Tick
+    for bar in ticker_bars:
+        engine._price_history.setdefault(ticker, []).append(float(bar["close"]))
+        engine._volume_history.setdefault(ticker, []).append(int(bar.get("volume", 0)))
+        # Trim to max_history
+        if len(engine._price_history[ticker]) > engine.max_history:
+            engine._price_history[ticker].pop(0)
+        if len(engine._volume_history[ticker]) > engine.max_history:
+            engine._volume_history[ticker].pop(0)
+
+
+def compute_rsi_from_prices(prices: List[float], lookback: int = 14) -> float:
+    """Compute RSI from a list of prices."""
+    if len(prices) < lookback + 1:
+        return 50.0
+    deltas = np.diff(prices)
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+    avg_gain = np.mean(gains[-lookback:])
+    avg_loss = np.mean(losses[-lookback:])
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def compute_momentum_from_prices(prices: List[float], lookback: int = 21) -> float:
+    """Compute simple rate of change momentum."""
+    if len(prices) < lookback + 1:
+        # Use whatever we have
+        lookback = max(len(prices) - 1, 1)
+    if lookback >= len(prices):
+        return 0.0
+    return (prices[-1] - prices[-lookback - 1]) / prices[-lookback - 1] * 100
+
+
+def attach_bar_signals_to_ticks(
+    ticks: List[Tick],
+    bars: Dict[str, List[dict]],
+) -> None:
+    """Pre-compute RSI/momentum/regime from bars and attach to Tick objects."""
+    for tick in ticks:
+        ticker_bars = bars.get(tick.ticker, [])
+        if len(ticker_bars) < 5:
+            continue
+        closes = [b["close"] for b in ticker_bars]
+        # RSI
+        if tick.rsi is None:
+            tick.rsi = round(compute_rsi_from_prices(closes), 1)
+        # Momentum
+        if tick.momentum is None:
+            tick.momentum = round(compute_momentum_from_prices(closes), 2)
+        # Volatility
+        if tick.volatility is None and len(closes) > 10:
+            returns = np.diff(closes) / closes[:-1]
+            tick.volatility = round(float(np.std(returns[-20:])) * 100, 2)
+        # Simple regime
+        if tick.regime is None and len(closes) > 20:
+            short_ma = np.mean(closes[-5:])
+            long_ma = np.mean(closes[-20:])
+            if short_ma > long_ma * 1.02:
+                tick.regime = "TRENDING_UP"
+            elif short_ma < long_ma * 0.98:
+                tick.regime = "TRENDING_DOWN"
+            else:
+                tick.regime = "MEAN_REVERTING"
+
+
+# ── Ticker diversity ─────────────────────────────────────────────────────────
+
+SECTOR_MAP = {
+    "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "META": "Tech",
+    "AMZN": "Consumer", "TSLA": "Auto", "NVDA": "Semiconductors",
+    "SPY": "ETF", "QQQ": "ETF",
+    "JPM": "Financial", "BAC": "Financial", "V": "Financial",
+    "WMT": "Consumer", "DIS": "Entertainment", "KO": "Consumer",
+    "JNJ": "Healthcare", "XOM": "Energy",
+}
+
+
+def diversify_tickers(symbols: List[str], max_per_sector: int = 3) -> List[str]:
+    """Limit to max_per_sector per sector to ensure variety."""
+    sector_count: Dict[str, int] = {}
+    result = []
+    for sym in symbols:
+        sector = SECTOR_MAP.get(sym, "Other")
+        if sector_count.get(sector, 0) < max_per_sector:
+            result.append(sym)
+            sector_count[sector] = sector_count.get(sector, 0) + 1
+    return result if result else symbols
+
+
+# ── Signal params builder ────────────────────────────────────────────────────
+
 def build_signal_params(
     base: str, virtual_config: Optional[Dict[str, Any]] = None
 ) -> SignalParams:
@@ -453,9 +651,20 @@ def pick_best_ticker(
     ticks: List[Tick],
     signal_params: SignalParams,
     trader_name: str = "",
+    bars: Optional[Dict[str, List[dict]]] = None,
 ) -> tuple[Optional[Tick], Optional[SignalReport]]:
-    """Compute signals for all tickers and pick the one with highest |composite_signal|."""
-    signal_engine = SignalEngine(params=signal_params, max_history=60)
+    """Compute signals for all tickers and pick the one with highest |composite_signal|.
+
+    Pre-warms the signal engine with historical bars so momentum, RSI, and regime
+    detection have real data instead of returning 0.0 on the first tick.
+    """
+    signal_engine = SignalEngine(params=signal_params, max_history=252)
+
+    # Pre-warm from historical bars
+    if bars:
+        for tick in ticks:
+            prewarm_signal_engine(signal_engine, bars, tick.ticker)
+
     best_ticker = None
     best_signal = None
     best_abs_score = -1.0
@@ -467,12 +676,19 @@ def pick_best_ticker(
             bootstrap = len(get_portfolio(trader_name).positions) == 0 if trader_name else True
             signal = signal_engine.process(tick, bootstrap=bootstrap)
             abs_score = abs(signal.composite_signal)
+            log.debug("  Signal for %s: composite=%.4f regime=%s rsi=%.1f bootstrap=%s",
+                       tick.ticker, signal.composite_signal, signal.regime,
+                       signal.rsi, bootstrap)
             if abs_score > best_abs_score:
                 best_abs_score = abs_score
                 best_ticker = tick
                 best_signal = signal
         except Exception as e:
             log.debug("Signal error for ticker=%s: %s", tick.ticker, e)
+
+    if best_signal and best_signal.composite_signal == 0.0:
+        log.warning("  Signal engine returned 0.0 for ALL %d tickers — this means "
+                    "indicators have no conviction. Check pre-warming and params.", len(ticks))
 
     return best_ticker, best_signal
 
@@ -535,6 +751,7 @@ def run_one_trader(
                 trade_source=trade_source,
                 regime=best_signal.regime,
                 signal_score=best_signal.composite_signal,
+                base_trader=base_trader,
             )
 
         result = {
@@ -801,6 +1018,10 @@ def main():
         help=f"Starting cash per virtual trader (default: ${_config['starting_cash']:,.0f})"
     )
     parser.add_argument(
+        "--live", action="store_true",
+        help="Submit real orders to Alpaca paper trading instead of just logging decisions"
+    )
+    parser.add_argument(
         "--quiet", action="store_true",
         help="Suppress logging, just print result table"
     )
@@ -815,6 +1036,7 @@ def main():
         "max_parallel": args.parallel,
         "starting_cash": args.starting_cash,
         "mock": args.mock or _config.get("mock", False),
+        "live": args.live or _config.get("live", False),
     })
 
     # Logging setup

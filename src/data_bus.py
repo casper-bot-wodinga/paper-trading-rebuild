@@ -121,6 +121,7 @@ try:
         _get_trade_signals,
         _get_agents,
         write_reflection,
+        get_last_reflection,
     )
     _HAS_REFLECTION = True
 except ImportError as e:
@@ -134,6 +135,7 @@ except ImportError as e:
     _get_trade_signals = None
     _get_agents = None
     write_reflection = None
+    get_last_reflection = None
 
 # ── News collector (RSS aggregation) ──────────────────────────────────────────
 try:
@@ -6749,6 +6751,109 @@ def self_stats():
     except Exception as e:
         log.warning("GET /self/stats failed for %s: %s", agent_id, e)
         return jsonify({"error": "stats unavailable", "data": None}), 503
+
+
+# ── Morning Brief — Yesterday's reflection for first-tick self-healing ───────────
+
+@app.route("/morning-brief", methods=["GET"])
+def morning_brief():
+    """
+    GET /morning-brief?agent_id=trader-kairos
+
+    Returns yesterday's reflection + suggested adjustments for first-tick review.
+    Designed for the Morning Prep step in each trader's HEARTBEAT.
+
+    Returns:
+    {
+      "agent_id": "trader-kairos",
+      "date": "2026-07-12",
+      "reflection": "Daily reflection markdown text...",
+      "suggestions": [
+        "Consider lowering conviction threshold from 0.6 to 0.5...",
+        "Consider expanding watchlist beyond SP500..."
+      ],
+      "critical_issues": ["No trades executed yesterday"],
+      "performance_summary": {
+        "win_rate": 0.55,
+        "total_pnl": 124.50,
+        "num_trades": 12,
+        "avg_hold_minutes": 45
+      }
+    }
+    """
+    agent_id = request.args.get("agent_id", "").strip()
+    if not agent_id:
+        return jsonify({"error": "agent_id parameter required"}), 400
+
+    try:
+        reflection = get_last_reflection(agent_id)
+        if not reflection:
+            return jsonify({
+                "agent_id": agent_id,
+                "date": None,
+                "reflection": None,
+                "suggestions": [],
+                "critical_issues": ["No reflections found yet — run a trading cycle first"],
+                "performance_summary": None,
+            })
+
+        # Parse suggestions — stored as JSONB, may be a string or list
+        suggestions_raw = reflection.get("suggestions")
+        suggestions = []
+        if suggestions_raw:
+            if isinstance(suggestions_raw, str):
+                try:
+                    suggestions = json.loads(suggestions_raw)
+                except (json.JSONDecodeError, TypeError):
+                    suggestions = [str(suggestions_raw)]
+            elif isinstance(suggestions_raw, list):
+                suggestions = suggestions_raw
+            else:
+                suggestions = [str(suggestions_raw)]
+
+        # Filter critical issues: suggestions that indicate problems
+        critical_issues = []
+        for s in suggestions:
+            lower = s.lower()
+            if any(w in lower for w in ["miss", "no trades", "declining", "only", "elevated", "reducing", "tightening"]):
+                critical_issues.append(s)
+        if not critical_issues and suggestions:
+            # If no critical keyword matched, just use first suggestion
+            pass
+
+        # Build performance summary
+        ts = stats_from_reflection(reflection)
+        performance_summary = {
+            "win_rate": ts.get("win_rate") if ts else None,
+            "total_pnl": ts.get("total_pnl") if ts else None,
+            "num_trades": ts.get("num_trades") if ts else None,
+            "avg_hold_minutes": round(ts.get("avg_hold_time_hours", 0) * 60, 1) if ts else None,
+        } if ts else None
+
+        result = {
+            "agent_id": agent_id,
+            "date": reflection.get("date"),
+            "reflection": reflection.get("reflection_text", ""),
+            "suggestions": suggestions,
+            "critical_issues": critical_issues,
+            "performance_summary": performance_summary,
+        }
+        return jsonify(result)
+    except Exception as e:
+        log.warning("GET /morning-brief failed for %s: %s", agent_id, e)
+        return jsonify({"error": str(e)}), 503
+
+
+def stats_from_reflection(reflection: dict) -> Optional[dict]:
+    """Extract today_stats-like dict from a reflection DB row."""
+    try:
+        return {
+            "win_rate": reflection.get("win_rate"),
+            "total_pnl": reflection.get("total_pnl"),
+            "num_trades": reflection.get("num_trades"),
+        }
+    except Exception:
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
