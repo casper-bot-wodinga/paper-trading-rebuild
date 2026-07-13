@@ -453,6 +453,7 @@ def build_signal_params(
 def pick_best_ticker(
     ticks: List[Tick],
     signal_params: SignalParams,
+    trader_name: str = "",
 ) -> tuple[Optional[Tick], Optional[SignalReport]]:
     """Compute signals for all tickers and pick the one with highest |composite_signal|."""
     signal_engine = SignalEngine(params=signal_params, max_history=60)
