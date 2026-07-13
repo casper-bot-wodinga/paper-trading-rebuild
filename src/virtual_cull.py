@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -50,6 +51,9 @@ BASE_TRADERS = ["kairos", "aldridge", "stonks"]
 DEFAULT_CULL_COUNT = 3
 P7D_LOOKBACK_DAYS = 7
 PROBATION_DAYS = 2
+
+# Perturbation factor when applying sweep best params (±5% of range)
+SWEEP_PERTURBATION_PCT = 0.05
 
 # Mapping from seed-style dot-notation config keys to flat SignalParams names
 _CONFIG_KEY_MAP: Dict[str, str] = {
@@ -228,18 +232,127 @@ def _random_suffix() -> str:
     return uuid.uuid4().hex[:6]
 
 
+def _fetch_sweep_best_params(base_trader: str) -> Optional[Dict[str, float]]:
+    """Fetch the best params from the latest sweep run for a base trader.
+
+    Queries sweep_runs for the most recent completed run, then fetches
+    the winning variant's params from sweep_results via validation_meta.
+
+    Returns:
+        Flat param dict (e.g. {'momentum_threshold': 0.55}), or None
+        if no sweep results exist.
+    """
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    try:
+        # Get the most recent completed sweep run for this trader
+        cur.execute(
+            """SELECT id, best_variant_id, best_score
+               FROM trading.sweep_runs
+               WHERE trader_id = %s
+                 AND finished_at IS NOT NULL
+               ORDER BY finished_at DESC
+               LIMIT 1""",
+            (base_trader,),
+        )
+        run = cur.fetchone()
+        if not run:
+            log.info("  No sweep results for %s — falling back to random", base_trader)
+            return None
+
+        # Fetch the winning variant's validation_meta for params
+        cur.execute(
+            """SELECT validation_meta
+               FROM trading.sweep_results
+               WHERE run_id = %s AND variant_id = %s""",
+            (run["id"], run["best_variant_id"]),
+        )
+        row = cur.fetchone()
+        if not row or not row.get("validation_meta"):
+            log.info("  No params found in sweep variant for %s", base_trader)
+            return None
+
+        meta = row["validation_meta"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+
+        # Extract params from validation_meta.signal_params_json
+        params_json = meta.get("signal_params_json", "")
+        if not params_json:
+            log.info("  No signal_params_json in sweep result for %s", base_trader)
+            return None
+
+        if isinstance(params_json, str):
+            params_data = json.loads(params_json)
+        else:
+            params_data = params_json
+
+        log.info(
+            "  Using sweep best params for %s (score=%s): %s",
+            base_trader, run["best_score"], params_data,
+        )
+        return {k: float(v) for k, v in params_data.items()}
+
+    except Exception as e:
+        log.warning("  Error fetching sweep params for %s: %s — falling back", base_trader, e)
+        return None
+    finally:
+        conn.close()
+
+
 def generate_param_variant(
     base_trader: str, top_config: Dict[str, Any]
 ) -> Tuple[str, Dict[str, Any]]:
-    """Generate a parameter perturbation of the #1 trader's config.
+    """Generate a parameter perturbation using sweep results.
 
-    Picks one known SignalParams parameter from the top config and perturbs
-    within ±15% of its valid range. Falls back to picking a random param
-    if the top config has no recognizable keys.
+    Instead of random perturbation, uses the best params from the
+    latest completed sweep run for this base trader. Applies a small
+    ±5% perturbation to the sweep best params to explore nearby space.
+
+    Falls back to the original random perturbation if no sweep results
+    exist or the top config has no recognizable params.
 
     Returns:
         (name, flat_config_dict)
     """
+    # Try sweep results first
+    sweep_params = _fetch_sweep_best_params(base_trader)
+
+    if sweep_params:
+        params = SignalParams()
+        new_config: Dict[str, Any] = {}
+
+        # Start with all sweep best params, perturb one by ±5% of range
+        tunable = [k for k in sweep_params if k in params.param_names()]
+
+        if tunable:
+            param_name = random.choice(tunable)
+            current = sweep_params[param_name]
+            bound = SignalParams.bound(param_name)
+            delta = (bound.max_val - bound.min_val) * random.uniform(
+                -SWEEP_PERTURBATION_PCT, SWEEP_PERTURBATION_PCT
+            )
+            new_val = bound.clip(current + delta)
+
+            # Build config: perturbed param + other sweep params
+            for name, val in sweep_params.items():
+                if name in params.param_names():
+                    new_config[name] = bound.clip(val) if name == param_name else float(val)
+            new_config[param_name] = new_val
+
+            log.info(
+                "  Perturbed sweep best %s from %.4f to %.4f (Δ=%.4f)",
+                param_name, current, new_val, delta,
+            )
+        else:
+            # Sweep params exist but none match — use as-is
+            new_config = dict(sweep_params)
+
+        name = f"{base_trader}-param-{_random_suffix()}"
+        return name, new_config
+
+    # Fallback: random perturbation of the top config (original behavior)
     normalized = normalize_config(top_config)
     params = SignalParams()
 
@@ -264,7 +377,7 @@ def generate_param_variant(
     new_val = bound.clip(current + delta)
 
     # Build the new config dict (flat names)
-    new_config: Dict[str, Any] = {param_name: new_val}
+    new_config = {param_name: new_val}
 
     # Copy other params from top config for consistency
     for name, val in normalized.items():
@@ -345,6 +458,85 @@ GENERATORS: List[Tuple[str, Any]] = [
 # ═══════════════════════════════════════════════════════════════════════════════
 # Database operations
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def publish_sweep_results(
+    trader_type: str,
+    best_params: Dict[str, float],
+    score: float,
+    run_id: Optional[int] = None,
+) -> int:
+    """Write best sweep params to virtual_traders DB so culling picks them up.
+
+    Updates active virtual traders for the given base strategy with the
+    winning sweep params merged into their config. Also writes config_overrides
+    to the config jsonb for immediate use.
+
+    Args:
+        trader_type: Base trader name (e.g., 'kairos', 'aldridge', 'stonks').
+        best_params: Flat SignalParams dict from the winning variant.
+        score: Best objective score from the sweep.
+        run_id: Optional sweep run ID for logging.
+
+    Returns:
+        Number of virtual traders updated.
+    """
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Get active virtual traders for this base strategy
+    cur.execute(
+        """SELECT id, name, config
+           FROM trading.virtual_traders
+           WHERE base_trader = %s
+             AND status = 'active'
+           ORDER BY name""",
+        (trader_type,),
+    )
+    rows = cur.fetchall()
+
+    if not rows:
+        log.info("  No active %s virtuals to publish sweep results to", trader_type)
+        conn.close()
+        return 0
+
+    # Convert flat params to dot-notation config format
+    flat_to_dot = {v: k for k, v in _CONFIG_KEY_MAP.items()}
+    dot_notation_overrides = {}
+    for flat_name, value in best_params.items():
+        if flat_name in flat_to_dot:
+            dot_notation_overrides[flat_to_dot[flat_name]] = value
+        else:
+            # Already a flat name or can't map — store flat
+            dot_notation_overrides[flat_name] = value
+
+    updated = 0
+    for row in rows:
+        existing_config = row.get("config", {})
+        if isinstance(existing_config, str):
+            existing_config = json.loads(existing_config)
+
+        # Merge sweep params into existing config (sweep wins on conflict)
+        merged = {**existing_config, **dot_notation_overrides}
+
+        cur.execute(
+            """UPDATE trading.virtual_traders
+               SET config = %s::jsonb
+               WHERE id = %s""",
+            (json.dumps(merged), row["id"]),
+        )
+        updated += 1
+        log.info(
+            "  Published sweep params to %s (score=%.4f, run_id=%s)",
+            row["name"], score, run_id or "?",
+        )
+
+    conn.close()
+    log.info(
+        "  Updated %d virtual traders with sweep best params from run_id=%s",
+        updated, run_id or "?",
+    )
+    return updated
+
 
 def insert_virtual(
     name: str,
