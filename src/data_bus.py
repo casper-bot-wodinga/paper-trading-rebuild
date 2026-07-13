@@ -5653,6 +5653,68 @@ if _mcp_tools_enabled():
             log.warning("get_self_stats failed for %s: %s", agent_id, e)
             return {"error": "stats unavailable", "data": None}
 
+    @mcp_server.tool()
+    async def get_portfolio(trader_id: str = "") -> dict:
+        """Get live portfolio data for paper traders from Alpaca.
+
+        Returns portfolio_value, cash, buying_power, positions, P&L for each
+        trader. If trader_id is omitted, returns all three.
+
+        Args:
+            trader_id: One of: kairos, aldridge, stonks, or empty for all.
+        """
+        import os
+        from src.execute import AlpacaExecutor
+
+        CRED_MAP = {
+            "kairos":   ("ALPACA_KAIROS_KEY", "ALPACA_KAIROS_SECRET"),
+            "aldridge": ("ALPACA_ALDRIDGE_KEY", "ALPACA_ALDRIDGE_SECRET"),
+            "stonks":   ("ALPACA_STONKS_KEY", "ALPACA_STONKS_SECRET"),
+        }
+
+        def _fetch_one(company: str) -> dict:
+            api_key, secret = CRED_MAP[company]
+            key = os.getenv(api_key) or os.getenv(api_key.replace("ALPACA_", "").replace("_KEY", "_API_KEY"))
+            sec = os.getenv(secret) or os.getenv(secret.replace("ALPACA_", "").replace("_SECRET", "_SECRET_KEY"))
+            if not key or not sec:
+                return {"error": f"no credentials for {company}"}
+            try:
+                ex = AlpacaExecutor(key, sec, company)
+                val = ex.get_account_value()
+                if val is None:
+                    return {"error": "Alpaca API unavailable"}
+                positions = []
+                for p in ex.client.get_all_positions():
+                    positions.append({
+                        "ticker": p.symbol,
+                        "qty": float(p.qty),
+                        "avg_entry": float(p.avg_entry_price),
+                        "current_price": float(p.current_price),
+                        "unrealized_pl": float(p.unrealized_pl),
+                        "unrealized_plpc": round(float(p.unrealized_plpc) * 100, 2),
+                        "market_value": float(p.market_value),
+                    })
+                return {
+                    "portfolio_value": val["portfolio_value"],
+                    "cash": val["cash"],
+                    "buying_power": val["buying_power"],
+                    "positions": positions,
+                    "source": "alpaca_live",
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        if trader_id:
+            tid = trader_id.strip().lower()
+            if tid not in CRED_MAP:
+                return {"error": f"unknown trader: {tid} (choose: kairos, aldridge, stonks)"}
+            return {tid: _fetch_one(tid)}
+
+        result = {}
+        for tid in CRED_MAP:
+            result[tid] = _fetch_one(tid)
+        return result
+
     log.info("MCP server: %d tools registered", len(mcp_server._tool_manager._tools))
 
 
