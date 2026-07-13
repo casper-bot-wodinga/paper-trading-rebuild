@@ -869,6 +869,23 @@ def _run_multidate_sweep(
 
     # 1. Get trading days
     dates = get_trading_days(n_dates, end_date=date_str)
+
+    # Filter out holdout dates — they must never appear in training or validation
+    holdout_available = False
+    try:
+        from src.holdout import HoldoutManager
+        hm = HoldoutManager()
+        holdout_set = hm.get_holdout_dates()
+        if holdout_set:
+            before = len(dates)
+            dates = hm.filter_holdout(dates)
+            removed = before - len(dates)
+            if removed:
+                print(f"  🚫 Excluded {removed} holdout date(s) from training/validation")
+                holdout_available = True
+    except ImportError:
+        pass
+
     print(f"  Trading days: {dates[0]} → {dates[-1]} ({len(dates)} days)")
 
     # 2. Build walk-forward windows
@@ -998,11 +1015,11 @@ def run_sweep(
     trader: Optional[str] = None,
     n_variants: int = 5,
     dry_run: bool = False,
-    n_dates: int = 1,
+    n_dates: int = 5,
     train_days: int = 5,
-    val_days: int = 1,
-    slippage_bps: float = 0.0,
-    use_costs: bool = False,
+    val_days: int = 2,
+    slippage_bps: float = 10.0,
+    use_costs: bool = True,
     phase2: bool = False,
     phase2_top_k: int = 3,
     phase2_budget: int = 9,
@@ -1050,6 +1067,17 @@ def run_sweep(
     # ── Single-date mode (backward compatible) ────────────────────────────
     if n_dates <= 1:
         ticks = _load_dates_data([date_str])
+        # Warn if this date is in the holdout set
+        try:
+            from src.holdout import HoldoutManager
+            hm = HoldoutManager()
+            if hm.is_holdout(date_str):
+                print(f"  ⚠️  {date_str} IS a holdout date — results are NOT representative")
+                print(f"     Holdout dates should only be used for quarterly evaluation.")
+        except ImportError:
+            pass
+
+        ticks = load_historical_ticks(date_str)
         print(f"[prompt_sweep] Loaded {len(ticks)} ticks for {date_str}")
 
         results: List[SweepResult] = []
@@ -1258,16 +1286,16 @@ def main():
                         help="Single trader short name (e.g., 'kairos'). Default: all.")
     parser.add_argument("--variants", type=int, default=5,
                         help="Number of variants per trader (default: 5).")
-    parser.add_argument("--dates", type=int, default=1,
-                        help="Number of historical trading days (default: 1 = single-date).")
+    parser.add_argument("--dates", type=int, default=5,
+                        help="Number of historical trading days for walk-forward (default: 5 = multi-day).")
     parser.add_argument("--train", type=int, default=5,
                         help="Training days per walk-forward window (default: 5).")
-    parser.add_argument("--val", type=int, default=1,
-                        help="Validation days per walk-forward window (default: 1).")
-    parser.add_argument("--slippage", type=float, default=0.0,
-                        help="Transaction cost in basis points (default: 0).")
-    parser.add_argument("--costs", action="store_true",
-                        help="Apply transaction costs to replay results.")
+    parser.add_argument("--val", type=int, default=2,
+                        help="Validation days per walk-forward window (default: 2).")
+    parser.add_argument("--slippage", type=float, default=10.0,
+                        help="Transaction cost in basis points (default: 10.0).")
+    parser.add_argument("--no-costs", action="store_true",
+                        help="Disable transaction costs (default: enabled).")
     parser.add_argument("--phase2", action="store_true",
                         help="Enable LLM validation phase (default: signal only).")
     parser.add_argument("--phase2-top-k", type=int, default=3,
@@ -1290,7 +1318,7 @@ def main():
         train_days=args.train,
         val_days=args.val,
         slippage_bps=args.slippage,
-        use_costs=args.costs,
+        use_costs=not args.no_costs,
         phase2=args.phase2,
         phase2_top_k=args.phase2_top_k,
         phase2_budget=args.phase2_budget,
