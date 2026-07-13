@@ -69,7 +69,6 @@ MARKET_OPEN_HOUR = 9
 MARKET_OPEN_MIN = 30
 MARKET_CLOSE_HOUR = 16
 MARKET_CLOSE_MIN = 0
-MARKET_CLOSE_MIN = 0
 
 
 def is_market_hours() -> bool:
@@ -647,6 +646,19 @@ def run_once(
     max_workers = min(_config["max_parallel"], len(tasks))
     results: List[Dict[str, Any]] = []
     active_decisions = 0
+
+    if not tasks:
+        log.info("No tasks to run.")
+        return {
+            "status": "ok",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "virtuals_loaded": len(virtuals),
+            "tasks_queued": 0,
+            "decisions": 0,
+            "symbols": len(symbols),
+            "quotes": len(quotes),
+            "results": [],
+        }
 
     # Use ThreadPoolExecutor for parallel LLM calls
     # Each task uses a shared engine — llm_engine.decide() is thread-safe

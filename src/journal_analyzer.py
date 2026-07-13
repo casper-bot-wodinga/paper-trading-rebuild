@@ -172,7 +172,7 @@ def compute_regime_stats(
         regime = trade.get("regime", "unknown")
         pnl = trade.get("pnl", 0.0) or 0.0
         stats[regime]["count"] += 1
-        stats[regime]["total_pnl"] += pnl
+        stats[regime]["total_pnl"] += float(pnl)
         if pnl > 0:
             stats[regime]["win_count"] += 1
 

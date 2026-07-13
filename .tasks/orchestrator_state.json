@@ -1,0 +1,25 @@
+{
+  "current_task": {
+    "id": "issue#80",
+    "source": "github",
+    "title": "P0: Dockerize data bus on docker.klo",
+    "priority": 100,
+    "number": 80,
+    "labels": [
+      "infra",
+      "priority:p0"
+    ]
+  },
+  "status": "working",
+  "started_at": "2026-07-09T20:00:22.575823+00:00",
+  "ticks": 3,
+  "last_action": "Tick #3 \u2014 see agent response",
+  "next_action": "Create .env.example for docker.klo deployment env vars, then build and test data-bus image locally",
+  "completed": [
+    "task:P0-deploy-virtual-runner",
+    "task:P0-deploy-virtual-runner"
+  ],
+  "total_completed": 2,
+  "blocked_reason": "",
+  "last_report_at": "2026-07-09T20:30:27.957610+00:00"
+}
