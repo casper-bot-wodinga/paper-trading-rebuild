@@ -110,6 +110,31 @@ from dotenv import load_dotenv
 load_dotenv(Path.home() / ".openclaw" / ".env", override=True)
 from src.db import dual_writer
 
+# ── Reflection cron (end-of-day analysis + GET /self/stats) ────────────────
+try:
+    from src.reflection_cron import (
+        generate_reflection,
+        generate_reflection_json,
+        compute_trade_stats,
+        schedule_reflection_cron,
+        _get_trades,
+        _get_trade_signals,
+        _get_agents,
+        write_reflection,
+    )
+    _HAS_REFLECTION = True
+except ImportError as e:
+    log.warning("reflection_cron module not available: %s — /self/stats disabled", e)
+    _HAS_REFLECTION = False
+    generate_reflection = None
+    generate_reflection_json = None
+    compute_trade_stats = None
+    schedule_reflection_cron = None
+    _get_trades = None
+    _get_trade_signals = None
+    _get_agents = None
+    write_reflection = None
+
 # ── News collector (RSS aggregation) ──────────────────────────────────────────
 try:
     from src.news_collector import start_news_collector, ensure_news_cache_table
@@ -5426,6 +5451,19 @@ if _mcp_tools_enabled():
             return {"market_regime": None, "error": str(e)}
         return {"market_regime": None, "error": "ML signal unavailable"}
 
+    @mcp_server.tool()
+    async def get_self_stats(agent_id: str) -> dict:
+        """Get performance stats for an agent: today's P&L, win rates by signal/sector, confidence calibration."""
+        if not _HAS_REFLECTION or generate_reflection_json is None:
+            return {"error": "stats module unavailable", "data": None}
+        try:
+            trades = _get_trades(agent_id, limit=100)
+            stats = generate_reflection_json(agent_id, trades)
+            return {"data": stats}
+        except Exception as e:
+            log.warning("get_self_stats failed for %s: %s", agent_id, e)
+            return {"error": "stats unavailable", "data": None}
+
     log.info("MCP server: %d tools registered", len(mcp_server._tool_manager._tools))
 
 
@@ -6679,8 +6717,66 @@ def virtual_trader_leaderboard():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# GET /self/stats — Agent performance stats
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/self/stats", methods=["GET"])
+def self_stats():
+    """
+    GET /self/stats?agent_id=trader-kairos
+
+    Returns comprehensive performance stats for an agent:
+      - today_stats: P&L, win rate, avg hold time, avg position size
+      - rolling_stats: last 10/50/100 win rate
+      - by_signal: win rate per signal name
+      - by_sector: win rate per sector
+      - confidence_calibration: confidence buckets → win rate
+      - suggestions: strategy suggestions
+
+    Graceful fallback: returns {"error": ..., "data": null} if Postgres unavailable.
+    """
+    agent_id = request.args.get("agent_id", "").strip()
+    if not agent_id:
+        return jsonify({"error": "agent_id parameter required", "data": None}), 400
+
+    if not _HAS_REFLECTION or generate_reflection_json is None:
+        return jsonify({"error": "stats module unavailable", "data": None}), 503
+
+    try:
+        trades = _get_trades(agent_id, limit=100)
+        stats = generate_reflection_json(agent_id, trades)
+        return jsonify({"data": stats})
+    except Exception as e:
+        log.warning("GET /self/stats failed for %s: %s", agent_id, e)
+        return jsonify({"error": "stats unavailable", "data": None}), 503
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Trader Config — exploration mode & runtime settings
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _run_migration_008():
+    """Run migration 008: trade_signals + daily_reflections + signal_win_rates tables.
+
+    Graceful failure: logs warning if Postgres unavailable.
+    """
+    import psycopg2 as _psycopg2
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "008_trade_signals_up.sql"
+    if not migration_path.exists():
+        log.warning("Migration 008 SQL file not found at %s", migration_path)
+        return
+
+    try:
+        conn = _psycopg2.connect(_VT_DB_DSN)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            sql = migration_path.read_text()
+            cur.execute(sql)
+        conn.close()
+        log.info("Migration 008 applied (trade_signals + daily_reflections)")
+    except Exception as e:
+        log.warning("Migration 008 failed (may already be applied): %s", e)
+
 
 def _ensure_trader_config_table():
     """Create the trader_config table if it doesn't exist."""
@@ -6923,6 +7019,16 @@ def main():
     _schedulers = _create_schedulers()
     for s in _schedulers:
         s.start()
+
+    # Run migration 008 (trade_signals + daily_reflections)
+    _run_migration_008()
+
+    # Start reflection cron scheduler
+    if _HAS_REFLECTION and schedule_reflection_cron:
+        try:
+            schedule_reflection_cron()
+        except Exception as e:
+            log.warning("Reflection cron scheduler failed to start: %s", e)
 
     # Start news collector (RSS aggregation daemon)
     if _HAS_NEWS_COLLECTOR and start_news_collector:
