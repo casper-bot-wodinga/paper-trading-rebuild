@@ -21,6 +21,15 @@ curl -s "http://localhost:5000/market-regime"
 
 # Fear & Greed index
 curl -s "http://localhost:5000/macro"
+
+# News (Alpaca API — live, searchable by ticker)
+curl -s "http://localhost:5000/news?symbol=AAPL&limit=5"
+
+# News cache (RSS aggregation — all feeds, stored in Postgres)
+curl -s "http://localhost:5000/news-cache?limit=10&source=marketwatch"
+
+# News search (full-text in RSS cache)
+curl -s "http://localhost:5000/news/search?q=AAPL"
 ```
 
 ## When to Call

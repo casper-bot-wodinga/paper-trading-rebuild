@@ -5,8 +5,8 @@ Read `skills/skill-kairos-strategy/SKILL.md` for full strategy rules.
 **Core flow:**
 0. Check inbox — `curl -s "http://localhost:8080/inbox?agent=kairos"` — respond to any pending Hermes messages
 1. Portfolio check — `python3 src/skill_portfolio.py --account kairos`
-2. Data bus pulse — rides, regime, sentiment, fear & greed
-3. **Stock discovery** — check momentum rankings (`GET /momentum`), scan for sector rotation and unusual volume breakouts. Propose at least 1 new ticker for the watchlist. Log discovery to `strategy_notes/<DATE>_discovery.md`.
+2. Data bus pulse — rides, regime, sentiment, fear & greed, news
+3. **Stock discovery** — check momentum rankings (`GET /momentum`) and news headlines (`GET /news` or `GET /news-cache`). Scan for sector rotation, unusual volume breakouts, and tickers making news. Propose at least 1 new ticker for the watchlist. Log discovery to `strategy_notes/<DATE>_discovery.md`.
 4. Time-based exit check — flag positions >5 days or >3 days stale
 5. Scoreboard sync — `python3 src/sync_exits_pg.py --backfill kairos`  # writes to Postgres trading.trades
 6. Log your read, journal a note, update profile
