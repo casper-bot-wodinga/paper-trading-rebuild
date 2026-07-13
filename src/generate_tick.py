@@ -170,7 +170,7 @@ def get_portfolio_snapshot(trader: str) -> Dict[str, Any]:
         # Get agent state
         cur.execute(
             "SELECT current_portfolio_value, unrealized_pnl, ytd_pnl "
-            "FROM agent_state WHERE agent_id = %s ORDER BY fetched_at DESC LIMIT 1",
+            "FROM trading.agent_state WHERE agent_id = %s ORDER BY updated_at DESC LIMIT 1",
             (trader,),
         )
         row = cur.fetchone()
@@ -180,33 +180,39 @@ def get_portfolio_snapshot(trader: str) -> Dict[str, Any]:
             snapshot["day_pnl"] = float(row[2] or 0.0)
 
         # Get latest portfolio_snapshot
-        cur.execute(
-            "SELECT cash, portfolio_value, daily_pnl, open_positions "
-            "FROM portfolio_snapshot WHERE trader_name = %s "
-            "ORDER BY fetched_at DESC LIMIT 1",
-            (trader,),
-        )
-        row = cur.fetchone()
-        if row:
-            snapshot["cash"] = float(row[0] or snapshot["cash"])
-            snapshot["portfolio_value"] = float(row[1] or snapshot["portfolio_value"])
-            snapshot["day_pnl"] = float(row[2] or snapshot["day_pnl"])
-            snapshot["open_positions"] = int(row[3] or 0)
+        try:
+            cur.execute(
+                "SELECT cash, portfolio_value, daily_pnl, open_positions "
+                "FROM trading.portfolio_snapshots WHERE trader_id = %s "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (trader,),
+            )
+            row = cur.fetchone()
+            if row:
+                snapshot["cash"] = float(row[0] or snapshot["cash"])
+                snapshot["portfolio_value"] = float(row[1] or snapshot["portfolio_value"])
+                snapshot["day_pnl"] = float(row[2] or snapshot["day_pnl"])
+                snapshot["open_positions"] = int(row[3] or 0)
+        except Exception as e:
+            log.debug("portfolio_snapshots query failed: %s", e)
 
         # Get open positions
-        cur.execute(
-            "SELECT ticker, quantity, entry_price, current_price, pnl "
-            "FROM positions WHERE trader_name = %s AND status = 'open'",
-            (trader,),
-        )
-        positions = cur.fetchall()
-        if positions:
-            snapshot["positions"] = [
-                {"ticker": p[0], "qty": float(p[1]), "entry": float(p[2]),
-                 "current": float(p[3]), "pnl": float(p[4])}
-                for p in positions
-            ]
-            snapshot["open_positions"] = len(positions)
+        try:
+            cur.execute(
+                "SELECT ticker, quantity, avg_entry_price, current_price, unrealized_pl "
+                "FROM trading.trader_positions WHERE trader_id = %s AND status = 'open'",
+                (trader,),
+            )
+            positions = cur.fetchall()
+            if positions:
+                snapshot["positions"] = [
+                    {"ticker": p[0], "qty": float(p[1]), "entry": float(p[2]),
+                     "current": float(p[3]), "pnl": float(p[4])}
+                    for p in positions
+                ]
+                snapshot["open_positions"] = len(positions)
+        except Exception as e:
+            log.debug("trader_positions query failed: %s", e)
 
         conn.close()
     except Exception as e:

@@ -32,6 +32,26 @@ from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 from pathlib import Path
 
+
+# ── Reflection file output directory ──────────────────────────────────────────
+_REFLECTIONS_BASE = Path.home() / "projects" / "trading-agent-prompts"
+_DEFAULT_REFLECTIONS_DIR = _REFLECTIONS_BASE / "_reflections"  # fallback aggregate
+
+
+def _get_reflections_dir(agent_id: str) -> Path:
+    """Get the reflection output directory for a given agent.
+
+    Tries agent-specific: ~/projects/trading-agent-prompts/<trader>/reflections/
+    Falls back to:       ~/projects/trading-agent-prompts/_reflections/<trader>/
+    """
+    agent_dir = _REFLECTIONS_BASE / agent_id
+    if agent_dir.is_dir():
+        ref_dir = agent_dir / "reflections"
+    else:
+        ref_dir = _DEFAULT_REFLECTIONS_DIR / agent_id
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    return ref_dir
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -671,6 +691,59 @@ def generate_reflection_json(agent_id: str, trades: List[dict] = None) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Reflection File Writer
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def write_reflection_file(agent_id: str, reflection_text: str, stats: dict) -> Path:
+    """Write a day's reflection markdown + JSON file to the agent's reflections dir.
+
+    Creates:
+      ~/projects/trading-agent-prompts/<trader>/reflections/YYYY-MM-DD.md
+      ~/projects/trading-agent-prompts/<trader>/reflections/YYYY-MM-DD.json
+      ~/projects/trading-agent-prompts/<trader>/reflections/latest.md  (symlink)
+
+    Returns the Path to the markdown file.
+    """
+    ref_dir = _get_reflections_dir(agent_id)
+    today_str = date.today().isoformat()
+
+    # Markdown
+    md_path = ref_dir / f"{today_str}.md"
+    md_path.write_text(reflection_text, encoding="utf-8")
+    log.info("Wrote reflection markdown: %s", md_path)
+
+    # JSON
+    json_path = ref_dir / f"{today_str}.json"
+    serializable = {
+        "agent_id": agent_id,
+        "date": today_str,
+        "reflection_length": len(reflection_text),
+        "n_suggestions": len(stats.get("suggestions", [])),
+        "today_stats": stats.get("today_stats"),
+        "rolling_stats": stats.get("rolling_stats"),
+        "by_signal": stats.get("by_signal"),
+        "by_sector": stats.get("by_sector"),
+        "confidence_calibration": stats.get("confidence_calibration"),
+        "suggestions": stats.get("suggestions"),
+        "total_trades": stats.get("total_trades"),
+        "generated_at": datetime.now().isoformat(),
+    }
+    json_path.write_text(json.dumps(serializable, indent=2, default=str), encoding="utf-8")
+    log.info("Wrote reflection json: %s", json_path)
+
+    # Latest symlink
+    latest_md = ref_dir / "latest.md"
+    try:
+        if latest_md.is_symlink() or latest_md.exists():
+            latest_md.unlink()
+        latest_md.symlink_to(md_path.name)
+    except OSError as e:
+        log.warning("Could not create latest.md symlink: %s", e)
+
+    return md_path
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Persistence
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -792,6 +865,7 @@ def _run_all_reflections(dry_run: bool = False) -> List[str]:
                 log.info("=== END REFLECTION %s ===", agent_id)
             else:
                 write_reflection(agent_id, reflection_md, stats)
+                write_reflection_file(agent_id, reflection_md, stats)
 
             processed.append(agent_id)
         except Exception as e:
@@ -866,6 +940,7 @@ def main():
             signals = _get_trade_signals(trade_ids) if trade_ids else {}
             stats = compute_trade_stats(trades, signals)
             write_reflection(args.agent, reflection, stats)
+            write_reflection_file(args.agent, reflection, stats)
             log.info("Reflection written for %s", args.agent)
 
     elif args.all:
