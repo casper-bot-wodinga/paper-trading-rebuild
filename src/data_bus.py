@@ -1949,6 +1949,33 @@ def health():
     })
 
 
+@app.route("/health/dashboard")
+def health_dashboard():
+    """Dashboard-specific health check — includes Postgres status, data bus, and cache health."""
+    pg_status = {"connected": False, "error": None}
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect("postgresql://trader:@192.168.1.179:5433/trading", connect_timeout=3)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        pg_status["connected"] = True
+        conn.close()
+    except Exception as e:
+        pg_status["error"] = str(e)
+
+    return jsonify({
+        "status": "ok",
+        "service": "data-bus",
+        "postgres": pg_status,
+        "cache": _cache.stats(),
+        "signals": len(_signals_cache),
+        "tracked_symbols": len(_tracked_symbols),
+        "uptime_seconds": time.time() - _start_time,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
 # ── Source Quality ───────────────────────────────────────────────────────────
 
 @app.route("/source-quality")
@@ -6230,6 +6257,11 @@ def discover():
             "/health": {
                 "method": "GET",
                 "description": "Service health check",
+                "params": {},
+            },
+            "/health/dashboard": {
+                "method": "GET",
+                "description": "Dashboard health check with Postgres status",
                 "params": {},
             },
             "/metrics": {

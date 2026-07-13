@@ -128,6 +128,40 @@ def _is_option_symbol(symbol: str) -> bool:
     return bool(re.match(r'^[A-Z]{1,6}\d{6}[CP]\d{8}$', symbol))
 
 
+def _get_sweep_results_from_pg(trader: str = "", limit: int = 20) -> list:
+    """Read sweep results from Postgres trading.sweep_results (PG-first).
+    Returns list of dicts, empty list on failure."""
+    results = []
+    try:
+        with _db() as conn:
+            query = "SELECT * FROM trading.sweep_results"
+            params: list = []
+            if trader:
+                query += " WHERE trader_id = %s"
+                params.append(trader)
+            query += " ORDER BY created_at DESC LIMIT %s"
+            params.append(limit)
+            rows = conn.execute(query, tuple(params)).fetchall()
+            for r in rows:
+                d = dict(r)
+                # Convert Decimal types to float for JSON
+                for k, v in list(d.items()):
+                    if hasattr(v, 'scaleb'):
+                        d[k] = float(v)
+                if d.get("validation_meta"):
+                    try:
+                        if isinstance(d["validation_meta"], str):
+                            d["validation_meta"] = json.loads(d["validation_meta"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if d.get("created_at"):
+                    d["timestamp"] = d["created_at"]
+                results.append(d)
+    except Exception:
+        pass
+    return results
+
+
 def _get_portfolio_from_db(company: str) -> Optional[dict]:
     """
     Read the latest portfolio snapshot from portfolio_snapshots table.
@@ -1508,7 +1542,10 @@ td{{border-bottom:1px solid var(--surface2)}}
 
 @app.route("/api/findings")
 def api_findings():
-    """Returns historical sim findings — sweep results from shared/trader.db.
+    """Returns historical sim findings — Postgres first, SQLite fallback.
+
+    Primary source: Postgres trading.sweep_results.
+    Fallback: SQLite shared/trader.db sweep_results.
 
     Query parameters:
         trader: Filter by trader name (optional).
@@ -1519,50 +1556,49 @@ def api_findings():
     """
     trader = request.args.get("trader", "")
     limit = int(request.args.get("limit", 20))
+    source = "pg"
 
-    results = []
-    try:
-        import sqlite3
-        db_path = ROOT / "shared" / "trader.db"
-        if not db_path.exists():
-            return jsonify({"findings": [], "count": 0, "db_path": str(db_path), "error": "no db file"})
+    results = _get_sweep_results_from_pg(trader, limit)
 
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
+    # ── Fallback: SQLite shared/trader.db ──
+    if not results:
+        source = "sqlite"
+        try:
+            import sqlite3
+            db_path = ROOT / "shared" / "trader.db"
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path))
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
 
-        # Check if sweep_results table exists
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sweep_results'")
-        if not cur.fetchone():
-            conn.close()
-            return jsonify({"findings": [], "count": 0, "status": "no_sweep_results_table"})
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sweep_results'")
+                if cur.fetchone():
+                    query = "SELECT * FROM sweep_results"
+                    params = []
+                    if trader:
+                        query += " WHERE trader = ?"
+                        params.append(trader)
+                    query += " ORDER BY timestamp DESC LIMIT ?"
+                    params.append(limit)
 
-        query = "SELECT * FROM sweep_results"
-        params = []
-        if trader:
-            query += " WHERE trader = ?"
-            params.append(trader)
-        query += " ORDER BY timestamp DESC LIMIT ?"
-        params.append(limit)
-
-        rows = cur.execute(query, params).fetchall()
-        for r in rows:
-            d = dict(r)
-            # Parse params JSON if present
-            if d.get("params"):
-                try:
-                    d["params"] = json.loads(d["params"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            results.append(d)
-        conn.close()
-    except Exception as e:
-        return jsonify({"findings": [], "count": 0, "error": str(e)})
+                    rows = cur.execute(query, params).fetchall()
+                    for r in rows:
+                        d = dict(r)
+                        if d.get("params"):
+                            try:
+                                d["params"] = json.loads(d["params"])
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        results.append(d)
+                conn.close()
+        except Exception:
+            pass
 
     return jsonify({
         "findings": results,
         "count": len(results),
         "trader_filter": trader or "all",
+        "source": source,
     })
 
 
