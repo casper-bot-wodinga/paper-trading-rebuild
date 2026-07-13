@@ -1806,13 +1806,11 @@ def api_eval_results():
     Timeframes: 1d, 5d, 20d, 90d performance windows.
     Sources: agent_benchmark_comparison, portfolio_snapshots, agent_profile.
     """
-    from datetime import timedelta
-
     timeframes = {
-        "1d": timedelta(days=1),
-        "5d": timedelta(days=5),
-        "20d": timedelta(days=20),
-        "90d": timedelta(days=90),
+        "1d": "1 day",
+        "5d": "5 days",
+        "20d": "20 days",
+        "90d": "90 days",
     }
 
     result = {}
@@ -1824,15 +1822,15 @@ def api_eval_results():
             for meta in TRADER_META:
                 agent_id = f"trader-{meta['id']}"
                 tf_data = {}
-                for tf_name, delta in timeframes.items():
+                for tf_name, period in timeframes.items():
                     try:
                         s_cur = conn.execute(
                             """SELECT timestamp, portfolio_value, cash
                                FROM portfolio_snapshots
                                WHERE trader_id = %s
-                                 AND timestamp >= NOW() - %s::interval
+                                 AND timestamp::timestamptz >= NOW() - %s::interval
                                ORDER BY timestamp ASC""",
-                            (agent_id, tf_name),
+                            (agent_id, period),
                         )
                         snapshots = s_cur.fetchall()
                         if snapshots:
