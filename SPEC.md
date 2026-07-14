@@ -3,7 +3,8 @@
 > **META-SPEC**: [ai-project-system v0.22](https://github.com/openclaw/openclaw/blob/main/docs/ai-project-system/META-SPEC.md)
 > **Repo**: `Tesselation-Studios/paper-trading-rebuild`
 > **Status**: Built + evolving — 3 traders live, Postgres native, webhook comms active
-> **Updated**: 2026-07-09
+> **Updated**: 2026-07-14
+> **Branch**: `v3` — current development
 >
 > This file is the **master index**. Each subsystem has its own spec in `specs/` with
 > implementation details. Details here are architecture-wide — everything else lives downstream.
@@ -88,6 +89,83 @@ These cannot be violated. All code and PRs are audited against them.
 11. **Cron is trigger, not instruction**: Cron messages are nudges. They don't specify strategy, stock universe, or entry rules — those live in AGENTS.md.
 12. **Decision quality gates are warning-only during bootstrap**: First 30 trades or +5% equity — thesis/signals_used/exit_condition are WARN only, not VETO.
 13. **Cron timeout must exceed model inference time × 3**: Minimum: model's P99 latency × 3.
+14. **Mode-gated execution**: Traders must check mode (`LIVE`/`HISTORICAL`) before executing. LIVE → real Alpaca trades + `trading.decisions`. HISTORICAL → sim trades → `trading.historical_decisions` only. No real money moves outside market hours.
+15. **Per-trader cron isolation**: Each trader gets its own tick cron (not one shared cron). Prevents cascading timeouts and allows per-trader timeout tuning.
+16. **Trader self-verification**: Each trader must pass a self-check (API keys, Alpaca, DB, execution) before being considered ready. Nightly maintenance runs these checks and fixes failures.
+
+---
+
+## Mode System (v3 — 2026-07-14)
+
+Traders operate in one of two modes, flipped by cron at market open/close:
+
+| Time | Mode | Execution Target | DB Table |
+|------|------|-----------------|----------|
+| 9:30 AM ET | **LIVE** | Real Alpaca trades | `trading.decisions` |
+| 4:00 PM ET | **HISTORICAL** | Simulated only | `trading.historical_decisions` |
+
+**Mode flip crons:**
+- `Mode Flip: LIVE (market open)` — 9:30 AM ET Mon-Fri → `python3 scripts/mode_manager.py all live`
+- `Mode Flip: HISTORICAL (market close)` — 4:00 PM ET Mon-Fri → `python3 scripts/mode_manager.py all historical`
+
+**Mode state file** per trader: `state/mode_{trader}.json`
+
+## Tick Architecture (v3 — 2026-07-14)
+
+Three separate per-trader tick crons, offset by 1 minute to prevent concurrent Alpaca calls:
+
+| Cron | Schedule | Trader |
+|------|----------|--------|
+| `Stonks Tick (5-min)` | `*/5 9-16 * * 1-5` | trader-stonks |
+| `Kairos Tick (5-min)` | `1-56/5 9-16 * * 1-5` | trader-kairos |
+| `Aldridge Tick (5-min)` | `2-57/5 9-16 * * 1-5` | trader-aldridge |
+
+**Each tick flow:**
+1. Check mode → LIVE or HISTORICAL
+2. `sessions_send` MARKET TICK to trader
+3. Trader analyzes (data-bus tools: `get_portfolio`, `get_quotes`, `get_sentiment`)
+4. Trader decides BUY/SELL/HOLD
+5. Trader executes trade via `exec` using `scripts/place_order.py`
+6. Tick runner reads reply via `sessions_history` and saves to DB
+
+## Nightly Maintenance Pipeline (v3 — 2026-07-14)
+
+Runs at 5:00 AM ET Mon-Fri via cron `Nightly Pre-Market Maintenance`.
+
+**`scripts/nightly_check.py`** verifies:
+1. PostgreSQL connectivity
+2. Alpaca API connectivity (all 3 traders)
+3. Data bus health (port 5000)
+4. Database schema integrity (`trading.decisions`, `trader_decisions`, `trades`)
+5. Recent decisions present (last 24h)
+6. Gateway config valid (all 3 traders configured)
+7. All tick crons present and enabled
+8. Trader workspaces exist
+9. Portfolio consistency (open positions, buying power, cash %)
+10. Trade execution smoke test (`place_order.py` functional)
+11. Backtest data available
+12. Log files present
+
+**Per-trader self-check**: `scripts/trader_check.py <trader>` — runs 7 checks (API keys, Alpaca, portfolio, data bus, order API, DB, open orders). Generates readiness report.
+
+**Auto-fix capability**: The 5 AM cron agent has `exec` + `cron` + `gateway` tools and a 2-hour budget to iterate on fixes before re-checking.
+
+## Trade Execution Pipeline (v3 — 2026-07-14)
+
+`scripts/place_order.py <trader_id> <BUY|SELL> <ticker> <qty>` places market orders via Alpaca paper trading API. Checks existing positions for SELL availability. Supports bracket orders (stop loss + take profit).
+
+API keys convention (checked in order):
+- `{TRADER}_API_KEY` / `{TRADER}_SECRET_KEY`
+- `ALPACA_{TRADER}_KEY` / `ALPACA_{TRADER}_SECRET`
+
+## Execution Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/place_order.py` | Place Alpaca market orders |
+| `scripts/mode_manager.py` | Get/set/auto-detect trader mode |
+| `scripts/nightly_check.py` | Full pre-market readiness check |
+| `scripts/trader_check.py` | Per-trader self-check ("can I work?") |
 
 ---
 
@@ -123,6 +201,10 @@ Native webhooks power bidirectional agent-to-agent communication:
 | [`specs/learning-simulation.md`](specs/learning-simulation.md) | Simulation engine, hypothesis generation, tool learning | 🟢 Active |
 | [`specs/agent-files.md`](specs/agent-files.md) | OpenClaw file types, size limits, prompt assembly | 🟢 Active |
 | [`specs/operational-hygiene.md`](specs/operational-hygiene.md) | Prompt deployment, cron hygiene, monitoring, bootstrap gates | 🟢 Active |
+| `scripts/place_order.py` | Alpaca trade execution | 🟢 v3 NEW |
+| `scripts/mode_manager.py` | LIVE/HISTORICAL mode management | 🟢 v3 NEW |
+| `scripts/nightly_check.py` | Pre-market 12-point readiness check | 🟢 v3 NEW |
+| `scripts/trader_check.py` | Per-trader 7-point self-check | 🟢 v3 NEW |
 
 **Future / aspirational** (not implemented, tracked for later):
 - Regime-scoped parameter overrides
@@ -170,51 +252,49 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 
 ---
 
-## Current State Assessment (2026-07-10)
+## Current State Assessment (2026-07-14 v3)
 
-> This section tracks drift between the SPEC's aspirational architecture and the live running system. Updated by Fusion Router review on 2026-07-10.
+### ✅ v3 Architecture Complete
 
-### 🔴 Critical Drift
+| Subsystem | Status | Details |
+|-----------|--------|---------|
+| Mode system (LIVE/HISTORICAL) | ✅ Deployed | Auto-flip at 9:30AM/4:00PM via crons |
+| Per-trader tick crons | ✅ Deployed | 3 separate 5-min crons, offset by 1 min |
+| Trade execution via exec | ✅ Deployed | `place_order.py` + Alpaca API |
+| Nightly maintenance | ✅ Deployed | 5 AM ET, 12-point check + auto-fix |
+| Per-trader self-checks | ✅ Deployed | 7-point verification per trader |
+| Data bus (port 5000) | ✅ Live | SPY $751, regime: CHOPPY |
+| PostgreSQL | ✅ Live | 2520 decisions, 1304 trades |
 
-| SPEC Claim | Live State | Impact |
-|---|---|---|
-| "LLM never touches a tool during a trading tick" — pre-assembled prompt | AGENTS.md lists 4+ tool calls per tick (`curl`, `python3 skill_*.py`, etc.) | 2-7 min per tick wasted on tool execution; P99 timeout risk |
-| Drawdown >15% → knockout, score=0 | Aldridge at 75% max DD, still trading | Circuit breaker not implemented — knocked-out trader still positions |
-| `prompts/{trader}.txt` is prompt source | `~/projects/trading-agent-prompts/{trader}/AGENTS.md` is source | Path mismatch; prompts live outside the repo |
-| JSON schema: `decision`/`conviction`/`rationale` | Live uses `action`/`confidence`/`reasoning` | Incompatible parsers; downstream tools read wrong fields |
+### 🔴 Known Issues
 
-### 🟡 Significant Drift
+| Issue | Impact | Plan |
+|-------|--------|------|
+| Stonks 83% cash — underinvested | Missing opportunity | Monitor, not urgent |
+| No backtest data directory | No historical validation | Rebuild data pipeline |
+| Dashboard disconnected from DB | No live portfolio view | Investigate dashboard-DB link |
+| Aldridge max DD >15% | Circuit breaker not triggered | Implement knockout rule |
+| Prompt bloat in AGENTS.md | Risk of silent truncation | Move synthesis to separate file |
 
-| SPEC Claim | Live State | Impact |
-|---|---|---|
-| XGBoost accuracy 78% | Kairos prompt says 63% | Stale model or stale prompt — can't tell which |
-| K-Means regime with 10 features | Rule-based `TRENDING_UP/DOWN/HIGH_VOL/MEAN_REVERTING` | K-means not deployed; old classifier still running |
-| Multi-date walk-forward sweep | Single-date sweep with synthetic data fallback | Prompt overfitting; synthetic data is noise |
-| Pre-market format validation blocks open | No evidence this gate is active | Broken prompts could hit production |
+### Live Trader State (2026-07-14 ~11:00 AM ET)
 
-### 🟢 Not Yet Deployed
+| Trader | Portfolio | Positions | Mode | Status |
+|--------|-----------|-----------|------|--------|
+| **Stonks** | $10,596 | NVDA (2), HOOD (12) | LIVE | 🟢 Trading |
+| **Kairos** | $9,274 | AAPL, BAC, CSCO, IWM, JNJ, KHC, KO, META, MSFT, PG, PLTR, PR | LIVE | 🟢 Trading |
+| **Aldridge** | $10,271 | AVGO (1) + 14 others | LIVE | 🟢 Trading |
 
-| Spec Subsystem | Status | Priority |
-|---|---|---|
-| Virtual traders (shadow + rotation) | Not deployed — tables don't exist | P2 |
-| K-Means regime detector (`regime_detector.py`) | Spec defined, not deployed | P3 |
-| BarLoader + backfill pipeline | Parquet data severely lopsided (61K rows on one day, 2 on others) | P1 |
-| CostModel in replay | Not implemented | P2 |
+### Last Trade Executed
+- Stonks: BUY 1 NVDA @ $207.05 (bracket: SL $203, TP $215) — 10:52 AM
+- Aldridge: BUY 1 AVGO @ $395.18 — 10:53 AM
 
-### Live System Health
+### Operational Crons
 
-| Trader | P&L | Win Rate | Max DD | Status |
-|--------|-----|----------|--------|--------|
-| **Kairos** | -$65 to -$83 | 0-16.7% | 14.7% | 🟡 0.3% from knockout |
-| **Aldridge** | — | 50% | **75%** | 🔴 Should be knocked out |
-| **Stonks** | $0 | 0% | 13.2% | 🔴 Not trading at all |
-
-### ⚠️ Active Risk: Prompt Bloat
-
-Nightly synthesis is appended into AGENTS.md (~80 lines/night). Current files are ~10K chars — approaching OpenClaw's 12K hard limit. Mid-file instructions will silently be truncated. Synthesis MUST be moved to a separate file or DB.
-
-### Action Items from Fusion Router
-
-See `FR-1` through `FR-18` in the fusion router review at `~/.tasks/review-fusion-router-rebuild.md`. Prioritized as P0-P4. The `.tasks/` queue in `~/.tasks/ready/` drives execution via the orchestrator heartbeat.
-
-**Next milestone:** Migrate tick architecture from tool-based to pre-assembled prompt (FR-2, FR-3). Unblocks FR-4 (schema unification) and all downstream work.
+| Cron | Schedule | Status |
+|------|----------|--------|
+| Stonks Tick (5-min) | `*/5 9-16 * * 1-5` | ✅ |
+| Kairos Tick (5-min) | `1-56/5 9-16 * * 1-5` | ✅ |
+| Aldridge Tick (5-min) | `2-57/5 9-16 * * 1-5` | ✅ |
+| Mode Flip: LIVE | 9:30 AM Mon-Fri | ✅ |
+| Mode Flip: HISTORICAL | 4:00 PM Mon-Fri | ✅ |
+| Nightly Pre-Market Maintenance | 5:00 AM Mon-Fri | ✅ |
