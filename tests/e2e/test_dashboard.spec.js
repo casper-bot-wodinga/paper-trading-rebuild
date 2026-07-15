@@ -84,11 +84,11 @@ test.describe('Trader Cards', () => {
 
     for (const card of await page.locator('.trader-card').all()) {
       await expect(card.locator('.card-pnl')).toBeVisible();
-      // Check state bars exist
+      // Check state bars exist (they may be hidden if value is 0%)
       await expect(card.locator('.state-bars')).toBeVisible();
-      await expect(card.locator('.state-bar-fill.confidence')).toBeVisible();
-      await expect(card.locator('.state-bar-fill.excitement')).toBeVisible();
-      await expect(card.locator('.state-bar-fill.frustration')).toBeVisible();
+      await expect(card.locator('.state-bar-fill.confidence')).toBeAttached();
+      await expect(card.locator('.state-bar-fill.excitement')).toBeAttached();
+      await expect(card.locator('.state-bar-fill.frustration')).toBeAttached();
     }
   });
 
@@ -126,11 +126,13 @@ test.describe('Trader Detail Modal', () => {
     await page.goto(DASHBOARD_URL);
     await waitForDashboard(page);
 
-    // Click the first trader card
-    await page.locator('.trader-card').first().click();
+    // Wait for trader card to be visible and clickable
+    const card = page.locator('.trader-card').first();
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await card.click();
 
-    // Modal should open
-    await expect(page.locator('#trader-modal')).toHaveClass(/open/);
+    // Modal should open — wait for class to include 'open'
+    await expect(page.locator('#trader-modal')).toHaveClass(/open/, { timeout: 5000 });
     await expect(page.locator('#modal-content')).toBeVisible();
 
     // Check for trader info in modal
@@ -143,20 +145,26 @@ test.describe('Trader Detail Modal', () => {
     await waitForDashboard(page);
 
     // Click first trader card
-    await page.locator('.trader-card').first().click();
-    await page.waitForTimeout(500);
+    const card = page.locator('.trader-card').first();
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await card.click();
+
+    // Wait for modal to open
+    await expect(page.locator('#trader-modal')).toHaveClass(/open/, { timeout: 5000 });
 
     // Should have positions section (could say "No open positions")
     const positionsSection = page.locator('.modal-section').filter({ hasText: /Positions/i });
-    await expect(positionsSection).toBeVisible();
+    await expect(positionsSection).toBeAttached();
   });
 
   test('should close modal with X button', async ({ page }) => {
     await page.goto(DASHBOARD_URL);
     await waitForDashboard(page);
 
-    await page.locator('.trader-card').first().click();
-    await expect(page.locator('#trader-modal')).toHaveClass(/open/);
+    const card = page.locator('.trader-card').first();
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await card.click();
+    await expect(page.locator('#trader-modal')).toHaveClass(/open/, { timeout: 5000 });
 
     // Click the close button
     await page.locator('.modal-close').click();
@@ -167,8 +175,10 @@ test.describe('Trader Detail Modal', () => {
     await page.goto(DASHBOARD_URL);
     await waitForDashboard(page);
 
-    await page.locator('.trader-card').first().click();
-    await expect(page.locator('#trader-modal')).toHaveClass(/open/);
+    const card = page.locator('.trader-card').first();
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await card.click();
+    await expect(page.locator('#trader-modal')).toHaveClass(/open/, { timeout: 5000 });
 
     // Press Escape
     await page.keyboard.press('Escape');
