@@ -81,8 +81,8 @@ def get_portfolio_value(agent: str = "stonks") -> float:
             val = data.get(f"last_{agent}")
             if val:
                 return float(val)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to read heartbeat-state.json: %s", e)
 
     # Try PG trader_decisions for latest portfolio value
     try:
@@ -99,8 +99,8 @@ def get_portfolio_value(agent: str = "stonks") -> float:
         conn.close()
         if row:
             return float(row[0])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to read portfolio from PG: %s", e)
 
     return 10_000.0  # fallback
 
