@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Stonks Entry Gate — code-level enforcement of trade entry rules.
+Entry Gate — code-level enforcement of trade entry rules for Stonks and Kairos.
 
-The agent describes this gate in its AGENTS.md as a hard requirement that
+Both agents describe this gate in their AGENTS.md as a hard requirement that
 runs before every Alpaca order. The agent CANNOT override it.
 
 Checks:
@@ -14,11 +14,12 @@ Checks:
 6. High-conviction override — conviction ≥ 0.80 + catalyst ≥ 0.7 bypasses technicals
 
 Usage:
-    python3 src/stonks_entry_gate.py --action BUY --ticker INTC --quantity 10 \\
-        --stop-loss 42.50 --confidence 0.78 --thesis "momentum play"
-    python3 src/stonks_entry_gate.py --action BUY --ticker INTC --quantity 10 \\
-        --price 43.50 --confidence 0.78 --rsi 62.5 --macd-bullish true \\
-        --volume-ratio 2.5 --fear-greed 30 --catalyst 0.0
+    python3 src/stonks_entry_gate.py --agent stonks --action BUY --ticker FUBO \\
+        --quantity 3 --price 9.93 --stop-loss 8.94 --confidence 0.78 \\
+        --signals 4 --rsi 54.2 --macd-bullish --volume-ratio 2.5 \\
+        --fear-greed 25 --catalyst 0.3
+    python3 src/stonks_entry_gate.py --agent kairos --action BUY --ticker SNAP \\
+        --quantity 3 --price 4.82 --confidence 0.75
 
 Output: JSON with verdict, reason, and details.
 """
@@ -247,11 +248,12 @@ def fetch_fear_greed() -> dict:
 # ── Gate Checks ──────────────────────────────────────────────────────────────
 
 def check_bankroll(
-    config: dict, portfolio_value: float, proposed_cost: float, proposed_ticker: str
+    config: dict, portfolio_value: float, proposed_cost: float, proposed_ticker: str,
+    agent: str = "stonks",
 ) -> Tuple[bool, str]:
     """Check if the proposed trade fits within the bankroll ceiling."""
     ceiling = compute_bankroll_ceiling(portfolio_value)
-    current = get_current_bankroll_state()
+    current = get_current_bankroll_state(agent)
     deployed = current["deployed"]
     remaining = max(ceiling - deployed, 0)
 
@@ -427,7 +429,7 @@ def run_gate(
     checks = []
 
     # 1. Bankroll check
-    bankroll_ok, bankroll_msg = check_bankroll(config, portfolio_value, proposed_cost, ticker)
+    bankroll_ok, bankroll_msg = check_bankroll(config, portfolio_value, proposed_cost, ticker, agent=agent)
     checks.append({"check": "bankroll", "passed": bankroll_ok, "message": bankroll_msg})
 
     if action == "HOLD" or action == "SELL":
@@ -505,6 +507,8 @@ def main():
     parser.add_argument("--volume-ratio", type=float, default=None)
     parser.add_argument("--fear-greed", type=int, default=None)
     parser.add_argument("--catalyst", type=float, default=0.0)
+    parser.add_argument("--agent", default="stonks", choices=["stonks", "kairos"],
+                        help="Which trader agent to gate (stonks|kairos)")
     parser.add_argument("--portfolio", type=float, default=None)
     parser.add_argument("--skip-technical", action="store_true", help="Bypass technical checks")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
@@ -561,6 +565,7 @@ def main():
         catalyst=args.catalyst,
         portfolio_value=args.portfolio,
         skip_technical=args.skip_technical,
+        agent=args.agent,
     )
 
     if args.json:

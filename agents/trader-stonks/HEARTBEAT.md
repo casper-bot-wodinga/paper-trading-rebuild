@@ -10,7 +10,7 @@ Read `skills/skill-stonks-strategy/SKILL.md` for full strategy rules.
 4. Data bus — flow, fear & greed, earnings calendar
 5. **Pre-trade gate** — before every BUY, run the entry gate:
    ```
-   python3 src/stonks_entry_gate.py \
+   python3 src/stonks_entry_gate.py --agent stonks \
        --action BUY --ticker FUBO --quantity 3 --price 9.93 \
        --stop-loss 8.94 --confidence 0.78 --signals 4 \
        --rsi 54.2 --macd-bullish --volume-ratio 2.5 \
@@ -23,6 +23,6 @@ Read `skills/skill-stonks-strategy/SKILL.md` for full strategy rules.
 7. Sync decisions to Postgres — `python3 scripts/sync_decisions_to_pg.py --apply`  # writes decisions + journal to trading.trader_decisions + trading.trader_journal
 8. Update profile
 9. Learning loop — `python3 -m src.learning_loop --agent trader-stonks`. Read the report. If param tweaks were applied, adjust your strategy accordingly. Pay attention to the **binding constraint** — focus improvement there.
-10. `python3 src/stonks_entry_gate.py --action HOLD --ticker NONE --json` (updates bankroll with current portfolio value)
+10. `python3 src/stonks_entry_gate.py --agent stonks --action HOLD --ticker NONE --json` (updates bankroll with current portfolio value)
 
 Output HEARTBEAT_OK when done.
