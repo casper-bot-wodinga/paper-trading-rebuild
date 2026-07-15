@@ -61,7 +61,11 @@ def fetch_quotes(symbols: list[str]) -> dict:
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode())
+            data = json.loads(resp.read().decode())
+            # Data bus returns {quotes: {SYM: {...}}}, unwrap if needed
+            if "quotes" in data:
+                return data["quotes"]
+            return data
     except Exception as e:
         print(f"[WARN] Quote fetch failed: {e}", file=sys.stderr)
         return {}

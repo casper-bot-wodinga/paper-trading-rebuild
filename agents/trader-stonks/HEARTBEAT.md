@@ -6,7 +6,15 @@ Read `skills/skill-stonks-strategy/SKILL.md` for full strategy rules.
 0. Check inbox — `curl -s "http://localhost:8080/inbox?agent=stonks"` — respond to any pending Hermes messages
 1. Portfolio check — `python3 src/skill_portfolio.py --account stonks`
 2. Social pulse — scan community chatter on positions and watchlist
-3. **Stock discovery** — scan Reddit/Bluesky/Stocktwits and news (`GET /news` or `GET /news-cache`) for trending tickers. Check unusual options flow (`GET /flow`). Propose at least 1 new ticker with community momentum. Log discovery to `strategy_notes/<DATE>_discovery.md`.
+3. **Stock discovery** — run the discovery scanner first:
+   ```
+   python3 scripts/stock_discovery.py --agent stonks --save
+   ```
+   Read `state/discovery_stonks_<DATE>.md` for top candidates under your bankroll ceiling.
+   Then cross-reference with community chatter (Reddit/Bluesky/Stocktwits via `GET /social`),
+   news (`GET /news`), and options flow (`GET /flow`).
+   Propose at least 1 new ticker with community momentum + momentum score > 0.3.
+   Log discovery to `strategy_notes/<DATE>_discovery.md`.
 4. Data bus — flow, fear & greed, earnings calendar
 5. **Pre-trade gate** — before every BUY, run the entry gate:
    ```
