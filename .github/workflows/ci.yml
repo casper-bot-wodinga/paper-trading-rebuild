@@ -200,6 +200,7 @@ jobs:
           DASHBOARD_URL: http://localhost:5002
           DATA_BUS_URL: http://localhost:5000
         run: |
+          mkdir -p test-results
           npx playwright test --reporter=html,github 2>&1 | tee test-results/e2e-output.log
 
       - name: Upload Playwright report
