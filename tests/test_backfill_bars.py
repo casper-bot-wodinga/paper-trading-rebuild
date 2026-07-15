@@ -175,6 +175,7 @@ def test_compute_indicators_float64(sample_bars_df):
         assert result[col].dtype == "float64", f"{col} is {result[col].dtype}"
 
 
+@pytest.mark.skipif(not bb._has_pandas_ta, reason="pandas_ta requires Python 3.12+")
 def test_compute_indicators_nan_for_early_rows(sample_bars_df):
     """Early rows have NaN for indicators that need warmup.
 

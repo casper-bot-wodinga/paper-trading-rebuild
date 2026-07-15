@@ -13,12 +13,22 @@ Strategy:
 - After-hours / no-data scenarios are handled gracefully
 """
 
+import os
 import pytest
 import requests
 from datetime import datetime
 
-DATA_BUS = "http://localhost:5000"
+DATA_BUS = os.environ.get("DATA_BUS_URL", "http://localhost:5000")
 TIMEOUT = 10  # seconds
+
+# Skip ALL tests in this module if the data bus isn't running
+try:
+    requests.get(f"{DATA_BUS}/health", timeout=3)
+    _BUS_UP = True
+except Exception:
+    _BUS_UP = False
+
+pytestmark = pytest.mark.skipif(not _BUS_UP, reason=f"Data bus not running at {DATA_BUS}")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

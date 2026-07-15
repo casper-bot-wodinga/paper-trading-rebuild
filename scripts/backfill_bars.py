@@ -34,6 +34,7 @@ BARS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 import pandas as pd
+import yfinance as yf  # noqa: E402 — module-level for mock compatibility
 
 # ── Ticker groups ────────────────────────────────────────────────────────────
 CORE_TICKERS: List[str] = [
@@ -180,7 +181,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def fetch_bars(ticker: str, start: str, end: str) -> Optional[pd.DataFrame]:
     """Fetch 5-min OHLCV bars from Yahoo Finance."""
-    import yfinance as yf  # lazy import
     try:
         df = yf.download(
             ticker,

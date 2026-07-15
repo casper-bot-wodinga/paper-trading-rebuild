@@ -937,6 +937,49 @@ def api_heartbeat():
     })
 
 
+# ── API: /api/tick/<trader> ────────────────────────────────────────────────────
+
+@app.route("/api/tick/<trader>", methods=["POST"])
+def api_tick(trader):
+    """Tick flasher — trader heartbeats hit this after each tick loop.
+    
+    Writes {trader: ISO-timestamp} to heartbeat-state.json so the dashboard
+    can show when each trader last completed a tick.
+    
+    Usage from trader heartbeat:
+        curl -s -X POST http://localhost:5002/api/tick/kairos
+    
+    Optional query params (logged but not yet surfaced on UI):
+        ?equity=10423.50&cash=8000
+    """
+    if trader not in [m["id"] for m in TRADER_META]:
+        return jsonify({"error": f"unknown trader: {trader}"}), 404
+
+    state_path = STATE / "heartbeat-state.json"
+    hb = _load_json(state_path)
+    
+    now = datetime.now().isoformat(timespec="seconds")
+    hb[f"last_{trader}"] = now
+    hb[f"ts_{trader}"] = now  # short key for easy dashboard lookup
+    
+    # Optional equity/cash from query params — stored for future UI display
+    equity = request.args.get("equity")
+    cash = request.args.get("cash")
+    if equity:
+        hb[f"equity_{trader}"] = float(equity)
+    if cash:
+        hb[f"cash_{trader}"] = float(cash)
+    
+    state_path.write_text(json.dumps(hb, indent=2))
+    
+    return jsonify({
+        "trader": trader,
+        "timestamp": now,
+        "ago_s": 0,
+        "status": "ok",
+    })
+
+
 # ── API: /api/options-proxy ──────────────────────────────────────────────────
 
 @app.route("/api/options-proxy")
