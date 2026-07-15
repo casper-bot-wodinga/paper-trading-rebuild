@@ -1,0 +1,146 @@
+[
+  {
+    "timestamp": "2026-07-14T20:25:21.726214",
+    "trader": "kairos",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 5.0,
+      "max_positions": 3,
+      "trailing_stop": 8.0,
+      "daily_loss_limit": 3.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T20:25:21.744900",
+    "trader": "aldridge",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 8.0,
+      "max_positions": 8,
+      "trailing_stop": 12.0,
+      "daily_loss_limit": 3.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T20:25:21.763448",
+    "trader": "stonks",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 10.0,
+      "max_positions": 5,
+      "trailing_stop": 10.0,
+      "daily_loss_limit": 5.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T21:44:19.689197",
+    "trader": "kairos",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 5.0,
+      "max_positions": 3,
+      "trailing_stop": 8.0,
+      "daily_loss_limit": 3.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T21:44:19.760800",
+    "trader": "aldridge",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 8.0,
+      "max_positions": 8,
+      "trailing_stop": 12.0,
+      "daily_loss_limit": 3.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T21:44:19.782277",
+    "trader": "stonks",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 10.0,
+      "max_positions": 5,
+      "trailing_stop": 10.0,
+      "daily_loss_limit": 5.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T21:49:03.947904",
+    "trader": "kairos",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 5.0,
+      "max_positions": 3,
+      "trailing_stop": 8.0,
+      "daily_loss_limit": 3.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T21:49:03.969294",
+    "trader": "aldridge",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 8.0,
+      "max_positions": 8,
+      "trailing_stop": 12.0,
+      "daily_loss_limit": 3.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  },
+  {
+    "timestamp": "2026-07-14T21:49:03.990649",
+    "trader": "stonks",
+    "date": "2026-07-14",
+    "n_trades": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "profit_factor": 0.0,
+    "rules": {
+      "stop_loss": 10.0,
+      "max_positions": 5,
+      "trailing_stop": 10.0,
+      "daily_loss_limit": 5.0
+    },
+    "learning_note": "No trades yet today. Regime: unknown. Ready to deploy when signals align."
+  }
+]

@@ -1,0 +1,382 @@
+ERROR: No Alpaca API credentials found. Set ALPACA_KAIROS_KEY / ALPACA_KAIROS_SECRET or similar env vars.
+Run: source .env && python3 scripts/backfill_bars.py --tickers core --days 20
+
+
+============================================================
+  STEP 1/5: Backfill missing bars
+  Tickers: core | Days: 20
+============================================================
+[nightly] ⚠️  Backfill exited with code 1
+
+============================================================
+  STEP 2/5: BarLoader → SQLite cache
+  Tickers: 8 | Range: 2026-06-17 → 2026-07-12
+============================================================
+  Available tickers: 8/8
+  Missing date-ticker pairs: 32 (will be skipped — backfill them first)
+  Cached 3,583 tick rows (2.0s)
+
+────────────────────────────────────────────────────────────
+  Processing trader: kairos
+────────────────────────────────────────────────────────────
+
+============================================================
+  STEP 3/5: Phase 1 — Signal Sweep (signal-only)
+  Date: 2026-07-12 | N_dates: 20 | Train: 7d | Val: 3d
+============================================================
+[prompt_sweep] Date: 2026-07-12
+[prompt_sweep] Traders: kairos
+[prompt_sweep] Variants per trader: 5
+[prompt_sweep] Mode: multi-date walk-forward (dates=20, train=7, val=3)
+[prompt_sweep] Costs: enabled (slippage=10.0 bps)
+
+
+============================================================
+[prompt_sweep] Walk-forward sweep: kairos
+============================================================
+  Trading days: 2026-06-15 → 2026-07-10 (20 days)
+  Walk-forward windows: 11 (train=7d, val=3d)
+  Scoring baseline across 11 windows...
+    Baseline window 2/11: score=-1.4639
+    Baseline window 4/11: score=-1.4062
+    Baseline window 6/11: score=-1.3349
+    Baseline window 8/11: score=-1.4436
+    Baseline window 10/11: score=-1.4622
+  Baseline: avg=-1.4325, stability=0.0485
+  Scoring 5 variants across 11 windows...
+    [1/5] conservative_sizing: avg_val=-1.4349, win_rate=27.3%, stability=0.0452
+    [2/5] momentum_focus: avg_val=-1.4350, win_rate=54.5%, stability=0.0403
+    [3/5] trend_following: avg_val=-1.4328, win_rate=27.3%, stability=0.0464
+    [4/5] volatility_adaptive: avg_val=-1.4325, win_rate=0.0%, stability=0.0485
+    [5/5] aggressive_sizing: avg_val=-1.4333, win_rate=18.2%, stability=0.0471
+
+  ❌ No variant passed all walk-forward criteria
+     Required: win_rate >= 0.6, avg_val > baseline + 0.05, stability < 2× baseline
+
+[nightly] Phase 1 complete (111.5s)
+  ❌ kairos: baseline=-1.4325, winner=none
+
+────────────────────────────────────────────────────────────
+  Processing trader: aldridge
+────────────────────────────────────────────────────────────
+
+============================================================
+  STEP 3/5: Phase 1 — Signal Sweep (signal-only)
+  Date: 2026-07-12 | N_dates: 20 | Train: 7d | Val: 3d
+============================================================
+[prompt_sweep] Date: 2026-07-12
+[prompt_sweep] Traders: aldridge
+[prompt_sweep] Variants per trader: 5
+[prompt_sweep] Mode: multi-date walk-forward (dates=20, train=7, val=3)
+[prompt_sweep] Costs: enabled (slippage=10.0 bps)
+
+
+============================================================
+[prompt_sweep] Walk-forward sweep: aldridge
+============================================================
+  Trading days: 2026-06-15 → 2026-07-10 (20 days)
+  Walk-forward windows: 11 (train=7d, val=3d)
+  Scoring baseline across 11 windows...
+    Baseline window 2/11: score=-1.4639
+    Baseline window 4/11: score=-1.4062
+    Baseline window 6/11: score=-1.3349
+    Baseline window 8/11: score=-1.4436
+    Baseline window 10/11: score=-1.4622
+  Baseline: avg=-1.4325, stability=0.0485
+  Scoring 5 variants across 11 windows...
+    [1/5] conservative_sizing: avg_val=-1.4349, win_rate=27.3%, stability=0.0452
+    [2/5] momentum_focus: avg_val=-1.4350, win_rate=54.5%, stability=0.0403
+    [3/5] trend_following: avg_val=-1.4328, win_rate=27.3%, stability=0.0464
+    [4/5] volatility_adaptive: avg_val=-1.4325, win_rate=0.0%, stability=0.0485
+    [5/5] aggressive_sizing: avg_val=-1.4333, win_rate=18.2%, stability=0.0471
+
+  ❌ No variant passed all walk-forward criteria
+     Required: win_rate >= 0.6, avg_val > baseline + 0.05, stability < 2× baseline
+
+[nightly] Phase 1 complete (114.0s)
+  ❌ aldridge: baseline=-1.4325, winner=none
+
+────────────────────────────────────────────────────────────
+  Processing trader: stonks
+────────────────────────────────────────────────────────────
+
+============================================================
+  STEP 3/5: Phase 1 — Signal Sweep (signal-only)
+  Date: 2026-07-12 | N_dates: 20 | Train: 7d | Val: 3d
+============================================================
+[prompt_sweep] Date: 2026-07-12
+[prompt_sweep] Traders: stonks
+[prompt_sweep] Variants per trader: 5
+[prompt_sweep] Mode: multi-date walk-forward (dates=20, train=7, val=3)
+[prompt_sweep] Costs: enabled (slippage=10.0 bps)
+
+
+============================================================
+[prompt_sweep] Walk-forward sweep: stonks
+============================================================
+  Trading days: 2026-06-15 → 2026-07-10 (20 days)
+  Walk-forward windows: 11 (train=7d, val=3d)
+  Scoring baseline across 11 windows...
+    Baseline window 2/11: score=-1.5103
+    Baseline window 4/11: score=-1.4440
+    Baseline window 6/11: score=-1.3522
+    Baseline window 8/11: score=-1.5244
+    Baseline window 10/11: score=-1.4886
+  Baseline: avg=-1.4470, stability=0.0644
+  Scoring 5 variants across 11 windows...
+    [1/5] conservative_sizing: avg_val=-1.4591, win_rate=36.4%, stability=0.0553
+    [2/5] momentum_focus: avg_val=-1.4425, win_rate=81.8%, stability=0.0619
+    [3/5] trend_following: avg_val=-1.4315, win_rate=81.8%, stability=0.0732
+    [4/5] volatility_adaptive: avg_val=-1.4470, win_rate=0.0%, stability=0.0644
+    [5/5] aggressive_sizing: avg_val=-1.4481, win_rate=36.4%, stability=0.0628
+
+  ❌ No variant passed all walk-forward criteria
+     Required: win_rate >= 0.6, avg_val > baseline + 0.05, stability < 2× baseline
+
+[nightly] Phase 1 complete (111.5s)
+  ❌ stonks: baseline=-1.4470, winner=none
+
+============================================================
+  STEP 6/7: Promote Winners to Virtual Traders (live)
+============================================================
+[nightly] No winners to promote to virtual traders
+
+[nightly] STEP 7: No holdout set configured — skipping verification
+  Run 'python3 scripts/holdout_eval.py --update' to create one.
+
+============================================================
+  STEP 7/7: Push Canvas Card
+============================================================
+[nightly] ✅ Canvas card pushed: 58b0cd66-bd2e-4f4e-abb6-e078a394708c
+
+============================================================
+  NIGHTLY PIPELINE COMPLETE
+  Duration: 341.3s
+============================================================
+  ❌ kairos: P1=None, P2=None, not promoted
+  ❌ aldridge: P1=None, P2=None, not promoted
+  ❌ stonks: P1=None, P2=None, not promoted
+
+  ⚠️  Warnings (1):
+    - Backfill exited with code 1
+
+[nightly] No winners promoted. Pipeline completed without promotions.
+Failed to get ticker 'AAPL' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0daaab0>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['AAPL']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  AAPL: no data returned
+Failed to get ticker 'AMZN' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0dabfe0>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['AMZN']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  AMZN: no data returned
+Failed to get ticker 'GOOGL' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0dfcb30>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['GOOGL']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  GOOGL: no data returned
+Failed to get ticker 'META' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0dfd910>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['META']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  META: no data returned
+Failed to get ticker 'MSFT' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0dfedb0>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['MSFT']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  MSFT: no data returned
+Failed to get ticker 'NVDA' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0954350>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['NVDA']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  NVDA: no data returned
+Failed to get ticker 'SPY' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0dfcf50>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['SPY']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  SPY: no data returned
+Failed to get ticker 'TSLA' reason: HTTPSConnectionPool(host='fc.yahoo.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7d97d0954410>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+1 Failed download:
+['TSLA']: YFTzMissingError('$%ticker%: possibly delisted; no timezone found')
+  TSLA: no data returned
+
+
+============================================================
+  STEP 1/5: Backfill missing bars
+  Tickers: core | Days: 20
+============================================================
+
+============================================================
+  BACKFILL — 2026-07-14 16:35:43
+  Tickers: AAPL, AMZN, GOOGL, META, MSFT, NVDA, SPY, TSLA
+  Days:    20
+  Force:   False
+  Output:  /home/openclaw/projects/paper-trading-rebuild/shared/cache/bars
+============================================================
+
+  AAPL: fetching 2026-06-23 → 2026-07-14...
+  AMZN: fetching 2026-06-23 → 2026-07-14...
+  GOOGL: fetching 2026-06-23 → 2026-07-14...
+  META: fetching 2026-06-23 → 2026-07-14...
+  MSFT: fetching 2026-06-23 → 2026-07-14...
+  NVDA: fetching 2026-06-23 → 2026-07-14...
+  SPY: fetching 2026-06-23 → 2026-07-14...
+  TSLA: fetching 2026-06-23 → 2026-07-14...
+
+============================================================
+  SUMMARY — 2026-07-14 16:35:57
+  Elapsed: 14.3s
+============================================================
+  ✓ Fetched: 0 tickers (0 new bars)
+  ⏭ Skipped: 0 tickers (fully covered)
+  ⚠ Empty:   8 tickers (AAPL, AMZN, GOOGL, META, MSFT, NVDA, SPY, TSLA)
+
+  💾 Cache:  8 parquet files, 1.7 MB
+
+
+[nightly] Backfill complete (35.6s)
+
+============================================================
+  STEP 2/5: BarLoader → SQLite cache
+  Tickers: 8 | Range: 2026-06-18 → 2026-07-13
+============================================================
+  Available tickers: 8/8
+  Missing date-ticker pairs: 32 (will be skipped — backfill them first)
+  Cached 3,583 tick rows (5.9s)
+
+────────────────────────────────────────────────────────────
+  Processing trader: kairos
+────────────────────────────────────────────────────────────
+
+============================================================
+  STEP 3/5: Phase 1 — Signal Sweep (signal-only)
+  Date: 2026-07-13 | N_dates: 20 | Train: 7d | Val: 3d
+============================================================
+[prompt_sweep] Date: 2026-07-13
+[prompt_sweep] Traders: kairos
+[prompt_sweep] Variants per trader: 5
+[prompt_sweep] Mode: multi-date walk-forward (dates=20, train=7, val=3)
+[prompt_sweep] Costs: enabled (slippage=10.0 bps)
+
+
+============================================================
+[prompt_sweep] Walk-forward sweep: kairos
+============================================================
+  Trading days: 2026-06-16 → 2026-07-13 (20 days)
+  Walk-forward windows: 11 (train=7d, val=3d)
+  Scoring baseline across 11 windows...
+    Baseline window 2/11: score=-1.5000
+    Baseline window 4/11: score=-1.5000
+    Baseline window 6/11: score=-1.5000
+    Baseline window 8/11: score=-1.5000
+    Baseline window 10/11: score=-1.5000
+  Baseline: avg=-1.5000, stability=0.0000
+  Scoring 5 variants across 11 windows...
+    [1/5] conservative_sizing: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [2/5] momentum_focus: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [3/5] trend_following: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [4/5] volatility_adaptive: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [5/5] aggressive_sizing: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+
+  ❌ No variant passed all walk-forward criteria
+     Required: win_rate >= 0.6, avg_val > baseline + 0.05, stability < 2× baseline
+
+[nightly] Phase 1 complete (43.2s)
+  ❌ kairos: baseline=-1.5000, winner=none
+
+────────────────────────────────────────────────────────────
+  Processing trader: aldridge
+────────────────────────────────────────────────────────────
+
+============================================================
+  STEP 3/5: Phase 1 — Signal Sweep (signal-only)
+  Date: 2026-07-13 | N_dates: 20 | Train: 7d | Val: 3d
+============================================================
+[prompt_sweep] Date: 2026-07-13
+[prompt_sweep] Traders: aldridge
+[prompt_sweep] Variants per trader: 5
+[prompt_sweep] Mode: multi-date walk-forward (dates=20, train=7, val=3)
+[prompt_sweep] Costs: enabled (slippage=10.0 bps)
+
+
+============================================================
+[prompt_sweep] Walk-forward sweep: aldridge
+============================================================
+  Trading days: 2026-06-16 → 2026-07-13 (20 days)
+  Walk-forward windows: 11 (train=7d, val=3d)
+  Scoring baseline across 11 windows...
+    Baseline window 2/11: score=-1.5000
+    Baseline window 4/11: score=-1.5000
+    Baseline window 6/11: score=-1.5000
+    Baseline window 8/11: score=-1.5000
+    Baseline window 10/11: score=-1.5000
+  Baseline: avg=-1.5000, stability=0.0000
+  Scoring 5 variants across 11 windows...
+    [1/5] conservative_sizing: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [2/5] momentum_focus: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [3/5] trend_following: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [4/5] volatility_adaptive: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [5/5] aggressive_sizing: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+
+  ❌ No variant passed all walk-forward criteria
+     Required: win_rate >= 0.6, avg_val > baseline + 0.05, stability < 2× baseline
+
+[nightly] Phase 1 complete (43.3s)
+  ❌ aldridge: baseline=-1.5000, winner=none
+
+────────────────────────────────────────────────────────────
+  Processing trader: stonks
+────────────────────────────────────────────────────────────
+
+============================================================
+  STEP 3/5: Phase 1 — Signal Sweep (signal-only)
+  Date: 2026-07-13 | N_dates: 20 | Train: 7d | Val: 3d
+============================================================
+[prompt_sweep] Date: 2026-07-13
+[prompt_sweep] Traders: stonks
+[prompt_sweep] Variants per trader: 5
+[prompt_sweep] Mode: multi-date walk-forward (dates=20, train=7, val=3)
+[prompt_sweep] Costs: enabled (slippage=10.0 bps)
+
+
+============================================================
+[prompt_sweep] Walk-forward sweep: stonks
+============================================================
+  Trading days: 2026-06-16 → 2026-07-13 (20 days)
+  Walk-forward windows: 11 (train=7d, val=3d)
+  Scoring baseline across 11 windows...
+    Baseline window 2/11: score=-1.5000
+    Baseline window 4/11: score=-1.5000
+    Baseline window 6/11: score=-1.5000
+    Baseline window 8/11: score=-1.5000
+    Baseline window 10/11: score=-1.5000
+  Baseline: avg=-1.5000, stability=0.0000
+  Scoring 5 variants across 11 windows...
+    [1/5] conservative_sizing: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [2/5] momentum_focus: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [3/5] trend_following: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [4/5] volatility_adaptive: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+    [5/5] aggressive_sizing: avg_val=-1.5000, win_rate=0.0%, stability=0.0000
+
+  ❌ No variant passed all walk-forward criteria
+     Required: win_rate >= 0.6, avg_val > baseline + 0.05, stability < 2× baseline
+
+[nightly] Phase 1 complete (43.1s)
+  ❌ stonks: baseline=-1.5000, winner=none
+
+============================================================
+  STEP 6/6: Push Canvas Card
+============================================================
+[nightly] ✅ Canvas card pushed: e04cb962-0c05-4b53-a849-1c6d77c5df60
+
+============================================================
+  NIGHTLY PIPELINE COMPLETE
+  Duration: 171.4s
+============================================================
+  ❌ kairos: P1=None, P2=None, not promoted
+  ❌ aldridge: P1=None, P2=None, not promoted
+  ❌ stonks: P1=None, P2=None, not promoted
+
+[nightly] No winners promoted. Pipeline completed without promotions.
