@@ -200,6 +200,42 @@ def ensure_tables(conn):
             param_value     DECIMAL,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS trading.equity_snapshots (
+            id              BIGSERIAL PRIMARY KEY,
+            trader_id       VARCHAR(32) NOT NULL,
+            date            DATE NOT NULL,
+            equity          DECIMAL NOT NULL,
+            cash            DECIMAL NOT NULL,
+            pnl             DECIMAL NOT NULL DEFAULT 0,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_equity_trader_date UNIQUE (trader_id, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_data.bars (
+            id              BIGSERIAL PRIMARY KEY,
+            ticker          VARCHAR(10) NOT NULL,
+            timestamp       TIMESTAMPTZ NOT NULL,
+            open            DECIMAL,
+            high            DECIMAL,
+            low             DECIMAL,
+            close           DECIMAL,
+            volume          BIGINT,
+            interval        VARCHAR(8) NOT NULL DEFAULT '1d',
+            source          VARCHAR(32) DEFAULT 'seed',
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS trading.signals (
+            id              BIGSERIAL PRIMARY KEY,
+            trader_id       VARCHAR(32) NOT NULL,
+            ticker          VARCHAR(10) NOT NULL,
+            timestamp       TIMESTAMPTZ NOT NULL,
+            composite_signal VARCHAR(16),
+            conviction       DECIMAL,
+            regime          VARCHAR(32),
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
     """
     # Split and execute each statement
     for stmt in tables.split(";"):
