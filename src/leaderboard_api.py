@@ -213,8 +213,10 @@ def _get_portfolio(company: str) -> Optional[dict]:
     # Compute cash correctly: portfolio_value - sum(market_value of positions)
     # Data bus writes wrong cash values to portfolio_snapshots, so we ignore snap["cash"]
     pv = snap.get("portfolio_value")
+    # Force float — Postgres returns Decimal, which can't be mixed with float in arithmetic
+    pv_f = float(pv) if pv is not None else 0.0
     pos_cost = sum(float(p.get("market_value", 0) or 0) for p in positions)
-    computed_cash = round(pv - pos_cost, 2) if pv else 0.0
+    computed_cash = round(pv_f - pos_cost, 2)
 
     snap_recent = (
         snap.get("snapshot_ts")
@@ -318,7 +320,7 @@ def _get_benchmark_data() -> dict:
                     row = cur.fetchone()
                     if row and spy_price:
                         data["comparisons"][aid] = {
-                            "agent_return": round(float(row["equity"] / 10000.0 - 1), 4),
+                            "agent_return": round(float(row["equity"]) / 10000.0 - 1, 4),
                             "spy_return": round(spy_price / 530.0 - 1, 4),  # rough baseline
                             "qqq_return": None,
                             "spy_excess": None,
