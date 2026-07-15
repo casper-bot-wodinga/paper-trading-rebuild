@@ -571,7 +571,7 @@ def api_traders():
         portfolio = _get_portfolio(company)
 
         pv  = portfolio["portfolio_value"] if portfolio else None
-        pct = round((pv - STARTING_VALUE) / STARTING_VALUE * 100, 2) if pv else None
+        pct = round((float(pv) - STARTING_VALUE) / STARTING_VALUE * 100, 2) if pv else None
 
         # Tag positions as option or equity
         positions = portfolio.get("positions", []) if portfolio else []
@@ -580,7 +580,7 @@ def api_traders():
             pos["is_option"] = _is_option_symbol(pos.get("ticker", pos.get("symbol", "")))
             if pos["is_option"]:
                 options_exposure += float(pos.get("market_value", 0) or 0)
-        options_pct = round((options_exposure / pv * 100), 1) if pv and pv > 0 else 0
+        options_pct = round((options_exposure / float(pv) * 100), 1) if pv and float(pv) > 0 else 0
 
         # Use journal timestamp (most reliable), fall back to heartbeat-state.json, then profile
         last_hb   = _get_last_activity(company) or heartbeat.get(f"last_{company}") or profile.get("updated_at")
@@ -1244,7 +1244,7 @@ def debug_dashboard():
                     po_c = pos["cnt"] if pos else 0
                     freq = dict(cfg).get("polling_freq_sec", "?") if cfg else "?"
 
-                    pnl = round(pv - STARTING_VALUE, 2) if pv else 0
+                    pnl = round(float(pv) - STARTING_VALUE, 2) if pv else 0
                     pnl_color = "var(--green)" if pnl >= 0 else "var(--red)"
                     pnl_sign = "+" if pnl >= 0 else ""
 
