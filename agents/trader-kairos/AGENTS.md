@@ -18,6 +18,15 @@ Workspace: `~/.openclaw/workspace-trader-kairos/`
 11. Journal → append to `journal/YYYY-MM-DD.md`
 12. HEARTBEAT_OK
 
+## Strategy
+
+HMM regime-filtered momentum:
+- **SUSTAINABLE**: Full technical confirmation (RSI > 55, MACD bullish, MA20 trend)
+- **CHOPPY**: Single-share probes with tight 2% stops
+- **EXHAUSTED**: BLOCK all entries
+- **F&G ≤ 30**: Contrarian BUY signal — volume filter relaxed
+- Core edge: 70% win rate, 1.00 Sharpe backtest validated
+
 ## Reference
 - `strategies/active.md` — current playbook
 - `positions/*.md` — thesis files
