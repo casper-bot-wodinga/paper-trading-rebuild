@@ -693,3 +693,106 @@
   Synced 36 journal entries
 
 === APPLY: 0 decisions, 36 journal entries ===
+
+── kairos (trader-kairos) ──
+  Latest DB decision: 2026-07-15T10:01:00
+  Journal files: 2
+    Found 5 decisions in 2026-07-14.md
+    Found 4 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-kairos/journal.md
+    Found 1 decisions in agent journal.md
+  Total unique decisions: 10
+  Newest: 2026-07-14T16:23:00
+  Synced 10 journal entries
+
+── aldridge (trader-aldridge) ──
+  Latest DB decision: 2026-07-15T09:58:00
+  Journal files: 2
+    Found 8 decisions in 2026-07-14.md
+    Found 2 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-aldridge/journal.md
+  Total unique decisions: 10
+  Newest: 2026-07-15T12:00:00
+  Inserted 1 new decisions
+  Synced 20 journal entries
+
+── stonks (trader-stonks) ──
+  Latest DB decision: 2026-07-15T11:50:00
+  Journal files: 2
+    Found 2 decisions in 2026-07-14.md
+    Found 14 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-stonks/journal.md
+    Found 1 decisions in agent journal.md
+  Total unique decisions: 17
+  Newest: 2026-07-10T12:29:00
+  Synced 37 journal entries
+
+=== APPLY: 1 decisions, 37 journal entries ===
+
+── kairos (trader-kairos) ──
+  Latest DB decision: 2026-07-15T10:01:00
+  Journal files: 2
+    Found 5 decisions in 2026-07-14.md
+    Found 4 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-kairos/journal.md
+    Found 1 decisions in agent journal.md
+  Total unique decisions: 10
+  Newest: 2026-07-14T16:23:00
+  Synced 10 journal entries
+
+── aldridge (trader-aldridge) ──
+  Latest DB decision: 2026-07-15T12:00:00
+  Journal files: 2
+    Found 8 decisions in 2026-07-14.md
+    Found 2 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-aldridge/journal.md
+  Total unique decisions: 10
+  Newest: 2026-07-15T12:00:00
+  Synced 20 journal entries
+
+── stonks (trader-stonks) ──
+  Latest DB decision: 2026-07-15T11:50:00
+  Journal files: 2
+    Found 2 decisions in 2026-07-14.md
+    Found 14 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-stonks/journal.md
+    Found 1 decisions in agent journal.md
+  Total unique decisions: 17
+  Newest: 2026-07-10T12:29:00
+  Synced 37 journal entries
+
+=== APPLY: 0 decisions, 37 journal entries ===
+
+── kairos (trader-kairos) ──
+  Latest DB decision: 2026-07-15T10:01:00
+  Journal files: 2
+    Found 5 decisions in 2026-07-14.md
+    Found 4 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-kairos/journal.md
+    Found 1 decisions in agent journal.md
+  Total unique decisions: 10
+  Newest: 2026-07-14T16:23:00
+  Synced 10 journal entries
+
+── aldridge (trader-aldridge) ──
+  Latest DB decision: 2026-07-15T12:00:00
+  Journal files: 2
+    Found 8 decisions in 2026-07-14.md
+    Found 2 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-aldridge/journal.md
+  Total unique decisions: 10
+  Newest: 2026-07-15T12:00:00
+  Synced 20 journal entries
+
+── stonks (trader-stonks) ──
+  Latest DB decision: 2026-07-15T11:50:00
+  Journal files: 2
+    Found 2 decisions in 2026-07-14.md
+    Found 14 decisions in 2026-07-15.md
+  Agent journal: /home/openclaw/.openclaw/agents/trader-stonks/journal.md
+    Found 1 decisions in agent journal.md
+  Total unique decisions: 17
+  Newest: 2026-07-10T12:29:00
+  Synced 37 journal entries
+
+=== APPLY: 0 decisions, 37 journal entries ===
