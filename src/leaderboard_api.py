@@ -33,7 +33,7 @@ load_dotenv(Path(".env"), override=False)
 # ── paths ─────────────────────────────────────────────────────────────────────
 ROOT    = Path(__file__).parent.parent   # project root
 STATE   = ROOT / "state"
-PG_DSN = "host=192.168.1.179 port=5433 dbname=trading user=trader"
+PG_DSN = os.getenv("PG_DSN", "host=trading-db port=5432 dbname=trading user=trader")
 UI_DIR  = Path(__file__).parent / "leaderboard_ui"
 
 app = Flask(__name__)
@@ -92,7 +92,7 @@ def _db():
     """
     conn = None
     try:
-        conn = psycopg2.connect("host=192.168.1.179 port=5433 dbname=trading user=trader")
+        conn = psycopg2.connect(os.getenv("PG_DSN", "host=trading-db port=5432 dbname=trading user=trader"))
         conn.autocommit = True
         with conn.cursor() as c:
             c.execute("SET search_path TO trading, public")
@@ -152,6 +152,7 @@ def _get_portfolio_from_db(company: str) -> Optional[dict]:
             "unrealized_pl": row["unrealized_pl"],
             "daily_pnl": row["daily_pnl"],
             "open_positions_count": row["open_positions"],
+            "positions": _get_positions_from_db(company),
             "snapshot_ts": row["timestamp"],
             "source": "db_snapshot",
         }
@@ -159,126 +160,78 @@ def _get_portfolio_from_db(company: str) -> Optional[dict]:
         return None
 
 
-def _get_alpaca_portfolio(company: str) -> Optional[dict]:
+def _get_positions_from_db(company: str) -> list:
+    """Read open positions from trader_positions table (PG fallback)."""
+    positions = []
+    try:
+        with _db() as conn:
+            rows = conn.execute(
+                """SELECT ticker, quantity, market_value, unrealized_pl,
+                          avg_entry_price, current_price
+                   FROM trader_positions
+                   WHERE trader_id = %s AND status = 'open'""",
+                (company,),
+            ).fetchall()
+            for r in rows:
+                mkt_val = float(r["market_value"]) if r["market_value"] else 0
+                upnl = float(r["unrealized_pl"]) if r["unrealized_pl"] else 0
+                avg_entry = float(r["avg_entry_price"]) if r["avg_entry_price"] else 0
+                cur_price = float(r["current_price"]) if r["current_price"] else 0
+                pl_pct = round((cur_price - avg_entry) / avg_entry * 100, 2) if avg_entry else 0
+                positions.append({
+                    "ticker": r["ticker"],
+                    "qty": float(r["quantity"]),
+                    "avg_entry": avg_entry,
+                    "current_price": cur_price,
+                    "unrealized_pl": upnl,
+                    "unrealized_plpc": pl_pct,
+                    "market_value": mkt_val,
+                })
+        return positions
+    except Exception:
+        return positions
+
+
+def _get_portfolio(company: str) -> Optional[dict]:
     """
-    Fetch portfolio data — DB snapshot first, live Alpaca fallback.
+    Fetch portfolio data from PostgreSQL — purely DB-backed.
     
-    1. If a recent DB snapshot exists (< 5 min old), use its values.
-    2. If stale or missing, query Alpaca live.
-    3. If Alpaca fails too, fall back to the stale snapshot (better than zeros).
-    
-    Positions are always fetched from Alpaca live when possible.
+    Reads the latest snapshot from portfolio_snapshots and open positions
+    from trader_positions. No Alpaca dependency.
     Returns dict with cash, portfolio_value, buying_power, positions, _source.
-    Returns None if no data is available from any source.
+    Returns None if no data is available.
     """
     snap = _get_portfolio_from_db(company)
+    if not snap:
+        return None
+
     snap_recent = (
-        snap
-        and snap.get("snapshot_ts")
+        snap.get("snapshot_ts")
         and _seconds_ago(snap["snapshot_ts"]) is not None
         and _seconds_ago(snap["snapshot_ts"]) < 300
     )
 
-    # ── always try Alpaca for positions ──
-    live_data = None
-    positions = []
-    try:
-        import sys
-        sys.path.insert(0, str(ROOT))
-        from src.execute import AlpacaExecutor
-
-        api_key_env, secret_env = _CRED_MAP[company]
-        # Prefer ALPACA_*_KEY naming (from ~/.openclaw/.env) over old-style names
-        api_key = (os.getenv(f"ALPACA_{company.upper()}_KEY")
-                   or os.getenv(api_key_env))
-        secret  = (os.getenv(f"ALPACA_{company.upper()}_SECRET")
-                   or os.getenv(secret_env))
-        if not api_key or not secret:
-            return None
-
-        executor = AlpacaExecutor(api_key, secret, company)
-        data = executor.get_account_value()
-        if data is None:
-            return None
-
-        # Fetch open positions so the UI can show what each trader holds
-        positions = []
-        try:
-            for p in executor.client.get_all_positions():
-                pl_pct = float(p.unrealized_plpc) * 100
-                positions.append({
-                    "ticker":          p.symbol,
-                    "qty":             float(p.qty),
-                    "avg_entry":       float(p.avg_entry_price),
-                    "current_price":   float(p.current_price),
-                    "unrealized_pl":   float(p.unrealized_pl),
-                    "unrealized_plpc": round(pl_pct, 2),
-                    "market_value":    float(p.market_value),
-                })
-        except Exception:
-            pass
-
-        # Merge exit conditions from local positions table
-        if positions:
-            try:
-                agent_id = f"trader-{company}"
-                with _db() as conn:
-                    if conn:
-                        for pos in positions:
-                            row = conn.execute(
-                                """SELECT exit_condition, holding_horizon_days, stop_loss
-                                   FROM trader_positions
-                                   WHERE agent_id = %s AND ticker = %s AND status = 'open'""",
-                                (agent_id, pos["ticker"]),
-                            ).fetchone()
-                            if row:
-                                pos["exit_condition"] = row["exit_condition"] or ""
-                                pos["holding_horizon_days"] = row["holding_horizon_days"]
-                                if row["stop_loss"] and not pos.get("stop_loss"):
-                                    pos["stop_loss"] = float(row["stop_loss"])
-            except Exception:
-                pass
-
-        data["positions"] = positions
-        return data
-    except Exception:
-        pass
-
-    # ── decide which values to return ──
     if snap_recent:
-        # Recent snapshot available — prefer it for account values
-        result = {
-            "cash": snap["cash"],
-            "portfolio_value": snap["portfolio_value"],
-            "buying_power": live_data.get("buying_power") if live_data else None,
-            "unrealized_pl": snap["unrealized_pl"],
-            "daily_pnl": snap["daily_pnl"],
-            "positions": positions,
-            "_source": "db_snapshot",
-        }
-        return result
-
-    if live_data:
-        # Live Alpaca succeeded
-        live_data["positions"] = positions
-        live_data["_source"] = "alpaca_live"
-        live_data["unrealized_pl"] = snap["unrealized_pl"] if snap else 0
-        live_data["daily_pnl"] = snap["daily_pnl"] if snap else 0
-        return live_data
-
-    if snap:
-        # Alpaca failed — use stale snapshot as fallback
         return {
             "cash": snap["cash"],
             "portfolio_value": snap["portfolio_value"],
             "buying_power": None,
             "unrealized_pl": snap["unrealized_pl"],
             "daily_pnl": snap["daily_pnl"],
-            "positions": [],
-            "_source": "stale_snapshot",
+            "positions": _get_positions_from_db(company),
+            "_source": "db_snapshot",
         }
 
-    return None
+    # Stale snapshot — still better than nothing
+    return {
+        "cash": snap["cash"],
+        "portfolio_value": snap["portfolio_value"],
+        "buying_power": None,
+        "unrealized_pl": snap["unrealized_pl"],
+        "daily_pnl": snap["daily_pnl"],
+        "positions": _get_positions_from_db(company),
+        "_source": "stale_snapshot",
+    }
 
 
 def _parse_decisions(company: str) -> list:
@@ -611,7 +564,7 @@ def api_traders():
     for meta in TRADER_META:
         company  = meta["id"]
         profile  = _get_profile_from_db(company)
-        portfolio = _get_alpaca_portfolio(company)
+        portfolio = _get_portfolio(company)
 
         pv  = portfolio["portfolio_value"] if portfolio else None
         pct = round((pv - STARTING_VALUE) / STARTING_VALUE * 100, 2) if pv else None
@@ -1018,7 +971,7 @@ def api_options_positions():
     for company in ["kairos", "aldridge", "stonks"]:
         portfolio = None
         try:
-            portfolio = _get_alpaca_portfolio(company)
+            portfolio = _get_portfolio(company)
         except Exception:
             continue
 
