@@ -1,0 +1,4 @@
+# CI/CD pipeline changes require review by a maintainer
+.github/workflows/ci.yml     @Tesselation-Studios/maintainers
+.github/workflows/auto-merge.yml @Tesselation-Studios/maintainers
+.github/CODEOWNERS           @Tesselation-Studios/maintainers
