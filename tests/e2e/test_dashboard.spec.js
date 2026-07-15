@@ -19,14 +19,20 @@ const POLL_TIMEOUT = 30_000;
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function waitForDashboard(page) {
-  // Wait for the dashboard to finish loading — look for real content, not skeletons
+  // Wait for the dashboard to finish loading — look for real content, not skeletons.
+  // Status flow: 'Connecting...' → 'Loading...' → 'OK' (or 'Live'/'Refreshing' via setStatus)
+  // We need to wait for data to actually load, not just leave the initial state.
   await page.waitForFunction(() => {
-    const statusDot = document.getElementById('status-dot');
-    if (!statusDot) return false;
-    // Status should not be "Connecting..." (initial skeleton state)
     const statusText = document.getElementById('status-text');
-    return statusText && statusText.textContent !== 'Connecting...';
+    if (!statusText) return false;
+    const text = statusText.textContent;
+    // Once data has loaded, status is 'OK', 'Live', or 'Refreshing' (or shows an error message)
+    return text === 'OK' || text === 'Live' || text === 'Refreshing' || text === 'Error';
   }, { timeout: POLL_TIMEOUT });
+  // Also wait for cachedTraders to be populated
+  await page.waitForFunction(() => {
+    return window.cachedTraders && window.cachedTraders.length > 0;
+  }, { timeout: 10000 });
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
