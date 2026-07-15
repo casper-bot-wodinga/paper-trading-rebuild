@@ -24,5 +24,6 @@ Read `skills/skill-stonks-strategy/SKILL.md` for full strategy rules.
 8. Update profile
 9. Learning loop — `python3 -m src.learning_loop --agent trader-stonks`. Read the report. If param tweaks were applied, adjust your strategy accordingly. Pay attention to the **binding constraint** — focus improvement there.
 10. `python3 src/stonks_entry_gate.py --agent stonks --action HOLD --ticker NONE --json` (updates bankroll with current portfolio value)
+11. Tick flasher — `curl -s -X POST http://localhost:5002/api/tick/stonks -H 'Content-Type: application/json' -d '{}' > /dev/null`
 
 Output HEARTBEAT_OK when done.

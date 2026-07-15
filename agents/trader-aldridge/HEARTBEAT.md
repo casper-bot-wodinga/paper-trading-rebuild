@@ -13,5 +13,6 @@ Read `skills/skill-aldridge-strategy/SKILL.md` for full strategy rules.
 7. Learning loop — `python3 -m src.learning_loop --agent trader-aldridge`. Read the report. If param tweaks were applied, adjust your strategy accordingly. Pay attention to the **binding constraint** — focus improvement there.
 8. Update profile
 9. `python3 src/heartbeat_timestamp.py aldridge`
+10. Tick flasher — `curl -s -X POST http://localhost:5002/api/tick/aldridge -H 'Content-Type: application/json' -d '{}' > /dev/null`
 
 Output HEARTBEAT_OK when done.

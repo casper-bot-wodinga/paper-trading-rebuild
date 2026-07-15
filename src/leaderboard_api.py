@@ -1536,6 +1536,35 @@ def static_files(filename):
     return send_from_directory(str(UI_DIR), filename)
 
 
+# ── API: /api/tick/<trader> ───────────────────────────────────────────────────
+
+@app.route("/api/tick/<trader>", methods=["POST"])
+def api_tick(trader):
+    """Record a trader's tick heartbeat. Called by traders at end of each tick."""
+    trader = trader.lower().strip()
+    if trader not in ("kairos", "aldridge", "stonks"):
+        return jsonify({"error": f"unknown trader: {trader}"}), 400
+    
+    data = request.get_json(silent=True) or {}
+    now = datetime.utcnow().isoformat()
+    
+    hb = _load_json(STATE / "heartbeat-state.json")
+    hb[f"ts_{trader}"] = now
+    if "equity" in data:
+        hb[f"last_{trader}"] = data["equity"]
+    if "cash" in data:
+        hb[f"cash_{trader}"] = data["cash"]
+    if "portfolio_value" in data:
+        hb[f"pv_{trader}"] = data["portfolio_value"]
+    
+    try:
+        (STATE / "heartbeat-state.json").write_text(json.dumps(hb, indent=2) + "\n")
+    except Exception as e:
+        return jsonify({"error": f"write failed: {e}"}), 500
+    
+    return jsonify({"ok": True, "trader": trader, "ts": now})
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -13,5 +13,6 @@ Read `skills/skill-kairos-strategy/SKILL.md` for full strategy rules.
 7. Log your read, journal a note, update profile
 8. Learning loop — `python3 -m src.learning_loop --agent trader-kairos`. Read the report. If param tweaks were applied, adjust your strategy accordingly. Pay attention to the **binding constraint** — focus improvement there.
 9. `python3 src/heartbeat_timestamp.py kairos`
+10. Tick flasher — `curl -s -X POST http://localhost:5002/api/tick/kairos -H 'Content-Type: application/json' -d '{}' > /dev/null`
 
 Output HEARTBEAT_OK when done.
