@@ -993,8 +993,8 @@ const TRADER_NAMES  = {
 
 let countdownTimer = null;
 let countdownSecs  = POLL_INTERVAL / 1000;
-let cachedTraders      = [];  // stored globally for modal + thoughts panel
-let cachedBenchmarks   = {};  // benchmark data (SPY/QQQ prices + comparisons)
+window.cachedTraders      = [];  // stored globally for modal + thoughts panel
+window.cachedBenchmarks   = {};  // benchmark data (SPY/QQQ prices + comparisons)
 
 // ── Fetch helpers ─────────────────────────────────────────────────────
 
