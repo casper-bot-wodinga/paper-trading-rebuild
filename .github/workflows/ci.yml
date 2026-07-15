@@ -1,13 +1,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # CI Pipeline — Paper Trading Rebuild
 #
-# On push or PR to main, runs:
-#   ✅ Guardrail tests          (test name: "guardrails")
-#   ✅ Bug regression tests     (test name: "bug-regression")
-#   ✅ JS syntax check          (test name: "js-syntax")
-#   ✅ No bare except blocks    (test name: "no-bare-except")
-#   ✅ No orphaned top-level JS (test name: "no-orphaned-js")
-#   ✅ Docker build             (test name: "docker-build")
+# Two-phase pipeline:
+#   Phase 1: ci — Unit tests, lint checks, Docker build validation
+#   Phase 2: integration — Docker Compose stack + Playwright E2E tests
+#
+# Runs on push or PR to main. All checks must pass before merging.
 #
 # ── Branch Protection Setup (configure in GitHub repo settings) ─────────────
 #
@@ -19,13 +17,14 @@
 #   ☑ Require status checks before merging
 #   ☑ Require branches to be up-to-date
 #
-# Required status checks (must match job step names exactly):
-#   guardrails
-#   bug-regression
-#   js-syntax
-#   no-bare-except
-#   no-orphaned-js
-#   docker-build
+# Required status checks (exact step/job names to add):
+#   ci / guardrails
+#   ci / bug-regression
+#   ci / js-syntax
+#   ci / no-bare-except
+#   ci / no-orphaned-js
+#   ci / docker-build
+#   integration / e2e
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -39,8 +38,11 @@ on:
 
 env:
   PYTHONUNBUFFERED: 1
+  COMPOSE_FILE: docker-compose.test.yml
 
 jobs:
+  # ── Phase 1: Unit tests, lint checks, static analysis ──────────────────────
+
   ci:
     runs-on: ubuntu-latest
     steps:
@@ -58,17 +60,11 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── Guardrail tests ────────────────────────────────────────────────────
-
       - name: guardrails
         run: PYTHONPATH=src python3 tests/test_guardrails.py
 
-      # ── Bug regression tests ───────────────────────────────────────────────
-
       - name: bug-regression
         run: PYTHONPATH=src python3 tests/test_bug_regression.py
-
-      # ── JS syntax check ────────────────────────────────────────────────────
 
       - name: js-syntax
         run: |
@@ -83,8 +79,6 @@ jobs:
             echo "All JS files pass syntax check"
           fi
 
-      # ── Bare except block check ────────────────────────────────────────────
-
       - name: no-bare-except
         run: |
           FOUND=$(grep -rn "except.*pass" src/ || true)
@@ -94,8 +88,6 @@ jobs:
             exit 1
           fi
           echo "No bare except:pass blocks found"
-
-      # ── Orphaned top-level JS in HTML ──────────────────────────────────────
 
       - name: no-orphaned-js
         run: |
@@ -128,8 +120,6 @@ jobs:
           print("No orphaned top-level JS found")
           PYEOF
 
-      # ── Docker build validation ────────────────────────────────────────────
-
       - name: docker-build
         run: |
           if [ -f Dockerfile.leaderboard ]; then
@@ -144,3 +134,101 @@ jobs:
           echo "Building: $DOCKERFILE"
           docker build --network host -t test-build -f "$DOCKERFILE" .
           echo "Docker build succeeded"
+
+  # ── Phase 2: Integration tests (Docker Compose stack + Playwright E2E) ────
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start Docker Compose test stack
+        run: |
+          docker compose -f docker-compose.test.yml up --build -d
+
+      - name: Wait for dashboard to be healthy
+        run: |
+          echo "Waiting for dashboard to be ready..."
+          for i in $(seq 1 60); do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' test-dashboard 2>/dev/null || echo "starting")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Dashboard is healthy after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "Timed out waiting for dashboard"
+              docker compose -f docker-compose.test.yml logs --tail=50
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Verify seed data loaded
+        run: |
+          RESPONSE=$(curl -sf http://localhost:5002/api/traders 2>&1 || echo "FAILED")
+          if [ "$RESPONSE" = "FAILED" ]; then
+            echo "ERROR: /api/traders endpoint not responding"
+            docker compose -f docker-compose.test.yml logs dashboard --tail=30
+            exit 1
+          fi
+          echo "$RESPONSE" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          traders = data.get('traders', [])
+          print(f'Got {len(traders)} traders')
+          for t in traders:
+              print(f'  {t[\"id\"]}: portfolio={t.get(\"portfolio_value\")}')
+          assert len(traders) >= 1, 'Expected at least 1 trader'
+          assert any(t.get('portfolio_value') for t in traders), 'Expected portfolio values'
+          "
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright
+        run: |
+          npm init -y > /dev/null 2>&1
+          npm install @playwright/test@latest
+          npx playwright install chromium --with-deps
+
+      - name: e2e
+        env:
+          DASHBOARD_URL: http://localhost:5002
+          DATA_BUS_URL: http://localhost:5000
+        run: |
+          npx playwright test --reporter=html,github 2>&1 | tee test-results/e2e-output.log
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-report
+          path: |
+            playwright-report/
+            test-results/e2e-report/
+            test-results/e2e-output.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-artifacts
+          path: |
+            test-results/
+          retention-days: 7
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.test.yml logs --tail=100 trading-db data-bus dashboard seed
+
+      - name: Tear down Docker Compose stack
+        if: always()
+        run: |
+          docker compose -f docker-compose.test.yml down -v --remove-orphans
