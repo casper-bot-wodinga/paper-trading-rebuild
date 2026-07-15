@@ -34,3 +34,6 @@ learning_loop.py: error: unrecognized arguments: --dry-run --optimize --days 1
 usage: learning_loop.py [-h] [--agent AGENT] [--all] [--inject-test-data]
                         [--health]
 learning_loop.py: error: unrecognized arguments: --dry-run --optimize --days 1
+usage: learning_loop.py [-h] [--agent AGENT] [--all] [--inject-test-data]
+                        [--health]
+learning_loop.py: error: unrecognized arguments: --dry-run --optimize --days 1

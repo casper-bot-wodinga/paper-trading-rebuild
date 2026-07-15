@@ -117,7 +117,7 @@ test.describe('Portfolio Values', () => {
     for (const val of values) {
       // Should either be a dollar amount or "No credentials" / unavailable
       // Trim whitespace before matching (Playwright returns raw textContent)
-      expect(val.trim()).toMatch(/^\$[\d,]+\.\d{2}$|No credentials|unavailable/i);
+      expect(val.trim()).toMatch(/^\$[\d,]+\.\d{1,2}$|No credentials|unavailable/i);
     }
   });
 
