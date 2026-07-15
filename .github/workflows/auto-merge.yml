@@ -1,6 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto-merge — Paper Trading Rebuild
+#
+# When CI passes on a PR from casper-bot-wodinga:
+#   - Draft PRs → skip (for human review)
+#   - Non-draft PRs → enable auto-merge (squash + delete branch)
+#
+# Draft PRs are human-review PRs. They stay open until manually marked
+# ready-for-review and merged. The bot does NOT touch draft PRs.
+# ─────────────────────────────────────────────────────────────────────────────
+
 name: Auto-merge on green CI
 
-# When a PR's checks pass, auto-merge if the author is casper-bot-wodinga
 on:
   workflow_run:
     workflows: ["CI"]
@@ -17,21 +27,33 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          # Get the PR number associated with this workflow run
-          PR_NUMBER=$(gh pr list --head "${{ github.event.workflow_run.head_branch }}" --json number --jq '.[0].number')
+          PR_NUMBER=$(gh pr list \
+            --head "${{ github.event.workflow_run.head_branch }}" \
+            --json number,author,isDraft \
+            --jq '.[0] // empty')
 
           if [ -z "$PR_NUMBER" ]; then
             echo "No PR found for branch ${{ github.event.workflow_run.head_branch }}"
             exit 0
           fi
 
-          # Check if PR author is casper-bot
-          AUTHOR=$(gh pr view "$PR_NUMBER" --json author --jq '.author.login')
+          NUMBER=$(echo "$PR_NUMBER" | jq -r '.number')
+          AUTHOR=$(echo "$PR_NUMBER" | jq -r '.author.login')
+          IS_DRAFT=$(echo "$PR_NUMBER" | jq -r '.isDraft')
 
+          echo "PR #$NUMBER — author=$AUTHOR isDraft=$IS_DRAFT"
+
+          # Only auto-merge bot PRs
           if [ "$AUTHOR" != "casper-bot-wodinga" ]; then
-            echo "PR #$PR_NUMBER author is $AUTHOR, not casper-bot-wodinga — skipping auto-merge"
+            echo "Author is $AUTHOR, not casper-bot-wodinga — skipping"
             exit 0
           fi
 
-          echo "Enabling auto-merge for PR #$PR_NUMBER (author: $AUTHOR)"
-          gh pr merge "$PR_NUMBER" --auto --squash --delete-branch
+          # Skip draft PRs — those are for human review
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "PR #$NUMBER is a draft — skipping auto-merge (waiting for human review)"
+            exit 0
+          fi
+
+          echo "Enabling auto-merge for PR #$NUMBER (author: $AUTHOR)"
+          gh pr merge "$NUMBER" --auto --squash --delete-branch

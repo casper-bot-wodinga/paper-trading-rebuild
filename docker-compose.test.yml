@@ -1,18 +1,31 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Test Docker Compose — Paper Trading Rebuild
 #
-# Standalone CI stack with:
-#   - PostgreSQL (trading-db)
-#   - Seed service (populates test data)
+# Self-contained CI stack with:
+#   - PostgreSQL (tmpfs — clean state every run)
+#   - Seed service (deterministic, populates test data)
+#   - Data-bus (no API keys, all endpoints return static/empty data)
 #   - Dashboard (leaderboard API + static frontend on :5002)
+#   - Test-runner (runs pytest + Playwright, exits with test exit code)
 #
 # Usage:
-#   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
-#   docker compose -f docker-compose.test.yml down -v
+#   # Full test run (build, start, run tests, shut down):
+#   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
 #
-# The seed service runs once and exits. The dashboard stays up serving
-# synthetic data for Playwright/curl verification.
-# ─────────────────────────────────────────────────────────────────────────────
+#   # Interactive debugging:
+#   docker compose -f docker-compose.test.yml up --build -d trading-db seed data-bus dashboard
+#   docker compose -f docker-compose.test.yml run --rm test-runner /bin/bash
+#
+#   # Clean up:
+#   docker compose -f docker-compose.test.yml down -v --remove-orphans
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# Invariants (see specs/containerization-testing-methodology.md):
+#   1. tmpfs Postgres — no state between runs
+#   2. NO_API_KEYS=true — no external dependencies
+#   3. Deterministic seed — random.seed(42)
+#   4. Test exit code propagates via --exit-code-from
+# ══════════════════════════════════════════════════════════════════════════════
 
 services:
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
@@ -31,11 +44,33 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+    # tmpfs = zero state between runs. Every test run starts clean.
     tmpfs: /var/lib/postgresql/data
     networks:
       - test-net
 
+  # ── Seed Service ───────────────────────────────────────────────────────────
+  # One-shot: runs schema creation + deterministic data loading, then exits.
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: test-seed
+    environment:
+      PG_DSN: host=trading-db port=5432 dbname=trading user=trader
+      PYTHONUNBUFFERED: 1
+      PAPER: "true"
+    working_dir: /app
+    command: python3 scripts/seed_test_data.py
+    depends_on:
+      trading-db:
+        condition: service_healthy
+    networks:
+      - test-net
+
   # ── Data Bus ───────────────────────────────────────────────────────────────
+  # Starts at :5000 with NO_API_KEYS=true — all external endpoints return
+  # fallback/empty data. Internal endpoints (health, cache stats) work fully.
   data-bus:
     build:
       context: .
@@ -43,11 +78,22 @@ services:
     container_name: test-data-bus
     environment:
       PYTHONUNBUFFERED: 1
+      PAPER: "true"
+      NO_API_KEYS: "true"           # Block external API calls
       PGHOST: trading-db
       PGPORT: 5432
       PGDATABASE: trading
       PGUSER: trader
       MCP_PORT: 5001
+      FINNHUB_API_KEY: ""
+      ALPHA_VANTAGE_KEY: ""
+      ALPACA_KAIROS_KEY: ""
+      ALPACA_KAIROS_SECRET: ""
+      ALPACA_ALDRIDGE_KEY: ""
+      ALPACA_ALDRIDGE_SECRET: ""
+      ALPACA_STONKS_KEY: ""
+      ALPACA_STONKS_SECRET: ""
+      FRED_API_KEY: ""
     working_dir: /app
     command: python3 src/data_bus.py --port 5000 --host 0.0.0.0
     depends_on:
@@ -55,10 +101,16 @@ services:
         condition: service_healthy
       seed:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:5000/health'); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
     networks:
       - test-net
 
-  # ── Dashboard (Leaderboard) ────────────────────────────────────────────────
+  # ── Dashboard (Leaderboard API + Static Frontend) ─────────────────────────
   dashboard:
     build:
       context: .
@@ -67,6 +119,7 @@ services:
     environment:
       PG_DSN: host=trading-db port=5432 dbname=trading user=trader
       PYTHONUNBUFFERED: 1
+      PAPER: "true"
     working_dir: /app
     command: python3 src/leaderboard_api.py --port 5002 --host 0.0.0.0
     ports:
@@ -85,23 +138,83 @@ services:
     networks:
       - test-net
 
-  # ── Seed Service ───────────────────────────────────────────────────────────
-  seed:
+  # ── Test Runner ───────────────────────────────────────────────────────────
+  # One-shot: waits for all services to be healthy, runs the full test suite
+  # (unit + integration + E2E), then exits. Exit code propagates to CI.
+  test-runner:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: test-seed
+    container_name: test-runner
     environment:
-      PG_DSN: host=trading-db port=5432 dbname=trading user=trader
       PYTHONUNBUFFERED: 1
-      PIP_NO_CACHE_DIR: 1
+      PAPER: "true"
+      # ── Service URLs (container names resolve via Docker network) ──────────
+      DATA_BUS_URL: http://data-bus:5000
+      DASHBOARD_URL: http://dashboard:5002
+      PG_DSN: host=trading-db port=5432 dbname=trading user=trader
+      # ── Test config ───────────────────────────────────────────────────────
+      CI: "true"
+      PYTEST_ADDOPTS: "-v --tb=short"
     working_dir: /app
-    command: python3 scripts/seed_test_data.py
     depends_on:
       trading-db:
         condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      data-bus:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
     networks:
       - test-net
+    # The test-runner entrypoint runs setup then the test suite.
+    # When running via `docker compose up --exit-code-from test-runner`,
+    # the container's exit code becomes the compose exit code.
+    command: >
+      sh -c "
+        set -e
+        echo '=== All services healthy. Running test suite ==='
+
+        # ── Phase 1: Unit tests (pure logic, no services needed) ──────────
+        echo ''
+        echo '═══ Phase 1: Unit Tests ═══'
+        python3 -m pytest tests/ \
+          -m 'not integration and not e2e' \
+          -x --timeout=30 --junitxml=logs/test-results/unit.xml \
+          --junit-prefix=unit -o junit_suite_name=unit \
+          2>&1 | tee logs/test-results/unit.log
+
+        # ── Phase 2: Integration tests (Docker services required) ─────────
+        echo ''
+        echo '═══ Phase 2: Integration Tests ═══'
+        python3 -m pytest tests/integration/ \
+          -x --timeout=60 --junitxml=logs/test-results/integration.xml \
+          --junit-prefix=integration \
+          2>&1 | tee logs/test-results/integration.log
+
+        # ── Phase 3: E2E Playwright tests ────────────────────────────────
+        echo ''
+        echo '═══ Phase 3: Playwright E2E Tests ═══'
+        echo 'Checking for Node.js...'
+        if command -v node >/dev/null 2>&1; then
+          if command -v npx >/dev/null 2>&1 && npx playwright --version >/dev/null 2>&1; then
+            mkdir -p logs/test-results
+            DASHBOARD_URL=http://dashboard:5002 \
+              DATA_BUS_URL=http://data-bus:5000 \
+              npx playwright test --reporter=html,github 2>&1 | tee logs/test-results/e2e.log
+          else
+            echo 'Playwright not installed in this container. Skipping E2E tests.'
+            echo 'To run E2E: install playwright-browsers in the Dockerfile.dev'
+          fi
+        else
+          echo 'Node.js not installed in this container. Skipping E2E tests.'
+          echo 'To run E2E: use a playwright-based Docker image or run from host.'
+        fi
+
+        echo ''
+        echo '=== All tests completed ==='
+      "
 
 networks:
   test-net:

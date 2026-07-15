@@ -25,7 +25,21 @@ import psycopg2.extras
 
 PG_DSN = os.getenv("PG_DSN", "host=trading-db port=5432 dbname=trading user=trader")
 
-NOW = datetime.now(timezone.utc)
+# ── Deterministic seed ───────────────────────────────────────────────────────
+# Seed must be set before any random calls. This makes every test run produce
+# identical data, which is critical for deterministic assertions in CI.
+DETERMINISTIC_SEED = 42
+random.seed(DETERMINISTIC_SEED)
+
+# ── Fixed reference timestamp ────────────────────────────────────────────────
+# Using a fixed timestamp instead of `datetime.now()` ensures the seed data
+# is identical regardless of when the tests run. This is critical for
+# deterministic assertions in CI.
+#
+# If you need "recent" data, set FIXED_NOW to a recent date. Tests that care
+# about relative timestamps (e.g. "last 30 days") use this value.
+FIXED_NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
+NOW = FIXED_NOW
 
 TRADERS = [
     {"agent_id": "kairos",   "name": "Kairós Capital",     "manager": "Zara Chen"},

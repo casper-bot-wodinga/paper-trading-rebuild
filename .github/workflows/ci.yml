@@ -24,6 +24,7 @@
 #   ci / no-bare-except
 #   ci / no-orphaned-js
 #   ci / docker-build
+#   integration / integration-tests
 #   integration / e2e
 #
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,6 +185,40 @@ jobs:
           assert any(t.get('portfolio_value') for t in traders), 'Expected portfolio values'
           "
 
+      - name: Set up Python 3.12 for integration tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python deps for integration tests
+        run: |
+          pip install -r requirements.txt
+          pip install psycopg2-binary
+
+      - name: integration-tests
+        env:
+          CI: "true"
+          DATA_BUS_URL: http://data-bus:5000
+          DASHBOARD_URL: http://dashboard:5002
+          PG_DSN: host=localhost port=5432 dbname=trading user=trader
+        run: |
+          mkdir -p logs/test-results
+          python3 -m pytest tests/integration/ \
+            -x --timeout=60 \
+            --junitxml=logs/test-results/integration.xml \
+            2>&1 | tee logs/test-results/integration.log
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: |
+            logs/test-results/
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -198,7 +233,7 @@ jobs:
       - name: e2e
         env:
           DASHBOARD_URL: http://localhost:5002
-          DATA_BUS_URL: http://localhost:5000
+          DATA_BUS_URL: http://data-bus:5000
         run: |
           mkdir -p test-results
           npx playwright test --reporter=html,github 2>&1 | tee test-results/e2e-output.log
