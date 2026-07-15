@@ -92,6 +92,11 @@ def parse_journal_for_decisions(path: Path) -> list[dict]:
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.split("\n")
     date_str = path.stem  # e.g. "2026-07-15"
+    # If filename is "journal" (no date), try to find first ISO date in the file
+    if date_str == "journal" or not re.match(r"\d{4}-\d{2}-\d{2}", date_str):
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", text)
+        if m:
+            date_str = m.group(1)
 
     decisions = []
     current_section = ""
@@ -137,6 +142,19 @@ def parse_journal_for_decisions(path: Path) -> list[dict]:
 
 def _extract_time_from_section(section: str, date_str: str) -> str:
     """Extract timestamp from section header."""
+    # First try ISO date in section header (e.g. "Entry 11 — 2026-07-14T16:23:00+00:00")
+    m = re.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2}:\d{2})", section)
+    if m:
+        return f"{m.group(1)}T{m.group(2)}"
+    # Try "Tick 12:35 ET — July 2" format - extract date from the section text
+    m = re.search(r"Tick\s+\d{1,2}:\d{2}\s*(?:AM|PM)?\s*ET?\s*[—–-]+\s*(\w+\s+\d{1,2})", section)
+    if m:
+        from datetime import datetime
+        try:
+            dt = datetime.strptime(f"{m.group(1)} {date_str[:4] if len(date_str) == 10 else ''}", "%B %d %Y")
+            return dt.strftime("%Y-%m-%dT%H:%M:%S")
+        except:
+            pass
     m = re.search(r"(\d{1,2}):(\d{2})", section)
     if m:
         return f"{date_str}T{m.group(1).zfill(2)}:{m.group(2)}:00"

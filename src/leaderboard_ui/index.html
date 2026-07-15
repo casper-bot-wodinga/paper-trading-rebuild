@@ -304,6 +304,10 @@ section { margin-bottom: 20px; }
 }
 
 /* ── Activity Feed ───────────────────────────────────────────────────── */
+.filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.filter-toggle { font-size: 11px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.filter-toggle.active { background: #2ea043; color: #fff; border-color: #2ea043; }
+.filter-count { font-size: 11px; color: var(--muted); }
 .activity-list { display: flex; flex-direction: column; gap: 0; }
 
 .activity-item {
@@ -903,6 +907,10 @@ section { margin-bottom: 20px; }
     <div class="split-row">
       <div class="panel scrollable">
         <div class="section-title">Recent Decisions</div>
+        <div class="filter-bar">
+          <button class="filter-toggle active" id="filter-holds-btn" onclick="toggleFilterHolds()">Show HOLDS</button>
+          <span class="filter-count" id="filter-count"></span>
+        </div>
         <div id="activity-feed" class="activity-list">
           <div class="empty-state">Loading...</div>
         </div>
@@ -1406,6 +1414,17 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+let hideHolds = true;  // default: hide HOLD decisions
+let cachedEvents = [];
+
+function toggleFilterHolds() {
+  hideHolds = !hideHolds;
+  const btn = document.getElementById("filter-holds-btn");
+  btn.classList.toggle("active");
+  btn.textContent = hideHolds ? "Show HOLDS" : "Hide HOLDS";
+  if (cachedEvents.length) renderActivity(cachedEvents);
+}
+
 // ── Render: Activity Feed ─────────────────────────────────────────────
 
 function renderVetoes(vetoes) {
@@ -1432,6 +1451,14 @@ function renderVetoes(vetoes) {
 
 function renderActivity(events) {
   const el = document.getElementById('activity-feed');
+  cachedEvents = events;
+  if (hideHolds) {
+    const before = events.length;
+    events = events.filter(e => (e.action || 'HOLD').toUpperCase() !== 'HOLD');
+    document.getElementById('filter-count').textContent = before > 0 ? `Showing ${events.length}/${before}` : '';
+  } else {
+    document.getElementById('filter-count').textContent = '';
+  }
   if (!events.length) {
     el.innerHTML = '<div class="empty-state">No decisions logged yet</div>';
     return;
