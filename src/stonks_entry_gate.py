@@ -47,7 +47,6 @@ def get_paths(agent: str) -> dict:
     return {
         "agent_id": agent_id,
         "config": PROJECT_ROOT / "agents" / agent_id / "config.yaml",
-        "bankroll": Path(os.getenv("OPENCLAW_HOME", "/home/openclaw")) / ".openclaw" / f"workspace-{agent_id}" / "bankroll.md",
         "heartbeat": STATE_DIR / "heartbeat-state.json",
     }
 
@@ -106,37 +105,64 @@ def get_portfolio_value(agent: str = "stonks") -> float:
 
 
 def get_current_bankroll_state(agent: str = "stonks") -> dict:
-    """Read the current bankroll state from bankroll.md."""
-    paths = get_paths(agent)
+    """Get current bankroll state from PG (trader_positions) + portfolio value.
+
+    No bankroll.md — everything comes from the database.
+    Positions are synced from Alpaca via sync_alpaca_positions.py.
+    """
     state = {
         "ceiling": 100.0,
         "deployed": 0.0,
         "positions": [],
+        "portfolio_value": 10_000.0,
     }
-    bankroll_path = paths["bankroll"]
-    if not bankroll_path.exists():
-        return state
 
-    text = bankroll_path.read_text(encoding="utf-8", errors="replace")
+    # Get portfolio value from PG
+    try:
+        import psycopg2 as _psycopg2
+        conn = _psycopg2.connect(PG_DSN)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT portfolio_value, cash FROM trading.portfolio_snapshots "
+            "WHERE trader_id = %s ORDER BY timestamp DESC LIMIT 1",
+            (f"trader-{agent}",)
+        )
+        row = cur.fetchone()
+        if row:
+            state["portfolio_value"] = float(row[0])
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
 
-    # Extract deployed positions
-    in_table = False
-    for line in text.split("\n"):
-        if "| Ticker" in line and "Cost" in line:
-            in_table = True
-            continue
-        if in_table and line.strip().startswith("|"):
-            if "---" in line:
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 5:
-                ticker = parts[1]
-                qty = float(parts[2]) if parts[2] else 0
-                cost = float(parts[4].replace("$", "").replace(",", "")) if parts[4] else 0
-                state["positions"].append({"ticker": ticker, "qty": qty, "cost": cost})
-                state["deployed"] += cost
-        elif in_table and not line.strip().startswith("|"):
-            break
+    # Calculate ceiling
+    state["ceiling"] = round(state["portfolio_value"] * 0.01, 2)
+
+    # Get open positions from PG
+    try:
+        import psycopg2 as _psycopg2
+        conn = _psycopg2.connect(PG_DSN)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT ticker, quantity, market_value, avg_entry_price "
+            "FROM trading.trader_positions "
+            "WHERE trader_id = %s AND status = 'open'",
+            (agent,)
+        )
+        for row in cur.fetchall():
+            ticker = row[0]
+            qty = float(row[1]) if row[1] else 0
+            cost = float(row[2]) if row[2] else 0
+            entry = float(row[3]) if row[3] else 0
+            state["positions"].append({
+                "ticker": ticker, "qty": qty,
+                "cost": cost, "avg_entry": entry
+            })
+            state["deployed"] += cost
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
 
     return state
 
@@ -147,106 +173,13 @@ def compute_bankroll_ceiling(portfolio_value: float) -> float:
 
 
 def update_bankroll_file(portfolio_value: float, proposed: dict, agent: str = "stonks") -> dict:
-    """Update bankroll.md with new ceiling and add proposed position."""
-    paths = get_paths(agent)
-    bankroll_path = paths["bankroll"]
-    ceiling = compute_bankroll_ceiling(portfolio_value)
-    current = get_current_bankroll_state(agent)
-    agent_name = agent.capitalize()
-
-    # Add the proposed position to the deployed list
-    new_position = {
-        "ticker": proposed.get("ticker", "?"),
-        "qty": proposed.get("quantity", 0),
-        "cost": proposed.get("cost", 0),
-    }
-    # Replace existing position for same ticker or append
-    found = False
-    for i, p in enumerate(current["positions"]):
-        if p["ticker"] == new_position["ticker"]:
-            current["positions"][i] = new_position
-            found = True
-            break
-    if not found:
-        current["positions"].append(new_position)
-
-    current["deployed"] = sum(p["cost"] for p in current["positions"])
-
-    # Build markdown content
-    lines = [
-        f"# Bankroll \u2014 {agent_name}",
-        "",
-        f"Ceiling: ${ceiling:.2f}",
-        f"Portfolio: ${portfolio_value:.2f}",
-        f"Ceiling formula: portfolio \u00d7 0.01",
-        f"Updated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
-        "",
-        "---",
-        "## Open Position Deployment",
-        "| Ticker | Qty | Entry Price | Cost | % of Ceiling |",
-        "|--------|-----|-------------|------|-------------|",
-    ]
-
-    for p in current["positions"]:
-        cost = p["cost"]
-        pct = f"{cost / ceiling * 100:.1f}%" if ceiling > 0 else "0%"
-        lines.append(
-            f"| {p['ticker']} | {p['qty']} | ${cost / max(p['qty'], 1):.2f} | ${cost:.2f} | {pct} |"
-        )
-
-    lines.extend([
-        "",
-        f"Remaining: ${max(ceiling - current['deployed'], 0):.2f}",
-        "",
-        "## Rules",
-        "- Ceiling = portfolio_value \u00d7 0.01 (recalculated on each check)",
-        "- Ceiling recalculates automatically from portfolio value. No growth multiplier needed.",
-        "- Ceiling can be split any way across any number of stocks",
-        "- $0 is valid \u2014 patience doesn't punish you",
-        "- Floor: $15.00 | No hard cap",
-    ])
-
-    bankroll_path.parent.mkdir(parents=True, exist_ok=True)
-    bankroll_path.write_text("\n".join(lines) + "\n")
-
+    """No-op: bankroll is code-driven now. Positions come from Alpaca via PG."""
     return {
-        "ceiling": ceiling,
-        "deployed": current["deployed"] + (proposed.get("cost", 0) if not found else 0),
-        "remaining": max(ceiling - current["deployed"] - (proposed.get("cost", 0) if not found else 0), 0),
+        "ceiling": compute_bankroll_ceiling(portfolio_value),
+        "deployed": 0.0,
+        "positions": [],
+        "note": "bankroll is code-driven via PG. No manual file needed.",
     }
-
-
-# ── Data Bus Fetch ───────────────────────────────────────────────────────────
-
-def fetch_data_bus(endpoint: str, params: dict = None) -> dict:
-    """Fetch data from the data bus on localhost:5000."""
-    try:
-        import urllib.request
-        import urllib.parse
-
-        url = f"http://localhost:5000/{endpoint.lstrip('/')}"
-        if params:
-            url += "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode())
-    except Exception as e:
-        print(f"[WARN] Data bus fetch failed ({endpoint}): {e}", file=sys.stderr)
-        return {}
-
-
-def fetch_quote(symbol: str) -> dict:
-    """Fetch quote data from data bus."""
-    return fetch_data_bus("quotes", {"symbols": symbol})
-
-
-def fetch_fear_greed() -> dict:
-    """Fetch Fear & Greed index."""
-    return fetch_data_bus("fear_greed")
-
-
-# ── Gate Checks ──────────────────────────────────────────────────────────────
-
 def check_bankroll(
     config: dict, portfolio_value: float, proposed_cost: float, proposed_ticker: str,
     agent: str = "stonks",

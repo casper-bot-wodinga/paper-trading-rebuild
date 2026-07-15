@@ -209,32 +209,27 @@ def _get_portfolio(company: str) -> Optional[dict]:
     if not snap:
         return None
 
+    positions = _get_positions_from_db(company)
+    # Compute cash correctly: portfolio_value - sum(market_value of positions)
+    # Data bus writes wrong cash values to portfolio_snapshots, so we ignore snap["cash"]
+    pv = snap.get("portfolio_value")
+    pos_cost = sum(float(p.get("market_value", 0) or 0) for p in positions)
+    computed_cash = round(pv - pos_cost, 2) if pv else 0.0
+
     snap_recent = (
         snap.get("snapshot_ts")
         and _seconds_ago(snap["snapshot_ts"]) is not None
         and _seconds_ago(snap["snapshot_ts"]) < 300
     )
 
-    if snap_recent:
-        return {
-            "cash": snap["cash"],
-            "portfolio_value": snap["portfolio_value"],
-            "buying_power": None,
-            "unrealized_pl": snap["unrealized_pl"],
-            "daily_pnl": snap["daily_pnl"],
-            "positions": _get_positions_from_db(company),
-            "_source": "db_snapshot",
-        }
-
-    # Stale snapshot — still better than nothing
     return {
-        "cash": snap["cash"],
-        "portfolio_value": snap["portfolio_value"],
+        "cash": computed_cash,
+        "portfolio_value": pv,
         "buying_power": None,
         "unrealized_pl": snap["unrealized_pl"],
         "daily_pnl": snap["daily_pnl"],
-        "positions": _get_positions_from_db(company),
-        "_source": "stale_snapshot",
+        "positions": positions,
+        "_source": "db_snapshot" if snap_recent else "stale_snapshot",
     }
 
 
@@ -858,7 +853,12 @@ def api_signals():
         r = _requests.get("http://localhost:5000/signals", timeout=3)
         if r.status_code == 200:
             data = r.json()
-            return jsonify(data)
+            # Only use data bus result if it has actual signals
+            db_signals = (data.get("signals") or []) if isinstance(data, dict) else (data or [])
+            if isinstance(data, list):
+                db_signals = data
+            if db_signals:
+                return jsonify({"signals": db_signals, "source": "databus"})
     except Exception as e:
         log.warning("leaderboard_api: %s", e)
 
@@ -879,6 +879,8 @@ def api_signals():
             except Exception as e:
                 log.warning("leaderboard_api: %s", e)
 
+    # Filter out noise (0.0 confidence signals from data bus bugs)
+    signals = [s for s in signals if s.get("confidence", 0) and float(s["confidence"]) > 0]
     return jsonify({"signals": signals})
 
 

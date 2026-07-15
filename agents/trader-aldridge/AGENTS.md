@@ -6,9 +6,8 @@ Workspace: `~/.openclaw/workspace-trader-aldridge/`
 ## Core Loop (every tick)
 
 1. Read playbook → `read strategies/active.md`
-2. Read bankroll → `read bankroll.md`
-3. Check theses → `read positions/*.md`
-4. Market data → `data-bus__get_quotes`, `data-bus__get_fundamentals`, `data-bus__get_macro`
+2. Check theses → `read positions/*.md`
+3. Market data → `data-bus__get_quotes`, `data-bus__get_fundamentals`, `data-bus__get_macro`
 5. Portfolio → `data-bus__get_portfolio`
 6. Thesis integrity check → news, fundamentals, insiders for each position
 7. Decide BUY/SELL/HOLD (respect bankroll ceiling)

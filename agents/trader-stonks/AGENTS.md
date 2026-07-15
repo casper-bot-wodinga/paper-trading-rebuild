@@ -6,8 +6,8 @@ Workspace: `~/.openclaw/workspace-trader-stonks/`
 ## Core Loop (every tick)
 
 1. Read playbook → `read strategies/active.md`
-2. Read bankroll → `read bankroll.md`
-3. Check theses → `read positions/*.md`
+2. Check theses → `read positions/*.md`
+3. Portfolio → `data-bus__get_portfolio`
 4. Community pulse → `data-bus__get_social`, `data-bus__get_sentiment`
 5. Market momentum → `data-bus__get_quotes`, `data-bus__get_flow`, `data-bus__get_fear_greed`
 6. Portfolio → `data-bus__get_portfolio`

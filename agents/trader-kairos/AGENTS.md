@@ -6,10 +6,9 @@ Workspace: `~/.openclaw/workspace-trader-kairos/`
 ## Core Loop (every tick)
 
 1. Read playbook → `read strategies/active.md`
-2. Read bankroll → `read bankroll.md`
-3. Check theses → `read positions/*.md`
-4. Market snapshot → `data-bus__get_quotes`, `data-bus__get_market_regime`
-5. Portfolio → `data-bus__get_portfolio`
+2. Check theses → `read positions/*.md`
+3. Market snapshot → `data-bus__get_quotes`, `data-bus__get_market_regime`
+4. Portfolio → `data-bus__get_portfolio`
 6. Self stats → `data-bus__get_self_stats`
 7. Decide BUY/SELL/HOLD (respect bankroll ceiling)
 8. Execute via Alpaca executor
