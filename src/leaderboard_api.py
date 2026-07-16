@@ -98,8 +98,9 @@ def _db():
     existing SQLite-style conn.execute(sql, params).fetchone() calls work on pg.
     """
     conn = None
+    dsn = os.getenv("PG_DSN", "host=192.168.1.179 port=5433 dbname=trading user=trader")
     try:
-        conn = psycopg2.connect("host=192.168.1.179 port=5433 dbname=trading user=trader")
+        conn = psycopg2.connect(dsn)
         conn.autocommit = True
         with conn.cursor() as c:
             c.execute("SET search_path TO trading, public")
@@ -173,10 +174,10 @@ def _get_portfolio_from_db(company: str) -> Optional[dict]:
     try:
         with _db() as conn:
             row = conn.execute(
-                """SELECT timestamp, cash, portfolio_value, unrealized_pl,
+                """SELECT timestamp, cash, portfolio_value, pnl as unrealized_pl,
                           daily_pnl, open_positions, source
-                   FROM portfolio_snapshots
-                   WHERE trader_id = %s
+                   FROM trading.portfolio_snapshots
+                   WHERE agent_id = %s
                    ORDER BY timestamp DESC LIMIT 1""",
                 (f"trader-{company}",),
             ).fetchone()
@@ -380,8 +381,8 @@ def _get_benchmark_data() -> dict:
                 try:
                     # Latest portfolio value from portfolio_snapshots
                     cur = conn.execute(
-                        """SELECT portfolio_value, timestamp FROM portfolio_snapshots
-                           WHERE trader_id = %s ORDER BY timestamp DESC LIMIT 1""",
+                        """SELECT portfolio_value, timestamp FROM trading.portfolio_snapshots
+                           WHERE agent_id = %s ORDER BY timestamp DESC LIMIT 1""",
                         (aid,),
                     )
                     row = cur.fetchone()

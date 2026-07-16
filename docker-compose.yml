@@ -84,10 +84,24 @@ services:
     environment:
       - PG_DSN=host=trading-db port=5432 dbname=trading user=trader
       - PYTHONUNBUFFERED=1
+      - ALPACA_KAIROS_KEY=${ALPACA_KAIROS_KEY}
+      - ALPACA_KAIROS_SECRET=${ALPACA_KAIROS_SECRET}
+      - ALPACA_ALDRIDGE_KEY=${ALPACA_ALDRIDGE_KEY}
+      - ALPACA_ALDRIDGE_SECRET=${ALPACA_ALDRIDGE_SECRET}
+      - ALPACA_STONKS_KEY=${ALPACA_STONKS_KEY}
+      - ALPACA_STONKS_SECRET=${ALPACA_STONKS_SECRET}
+      - KAIROS_API_KEY=${KAIROS_API_KEY}
+      - KAIROS_SECRET_KEY=${KAIROS_SECRET_KEY}
+      - ALDRIDGE_API_KEY=${ALDRIDGE_API_KEY}
+      - ALDRIDGE_SECRET_KEY=${ALDRIDGE_SECRET_KEY}
+      - STONKS_API_KEY=${STONKS_API_KEY}
+      - STONKS_SECRET_KEY=${STONKS_SECRET_KEY}
     working_dir: /app
-    command: python3 src/pg_dashboard.py
+    command: python3 src/leaderboard_api.py --port 5004 --host 0.0.0.0
     depends_on:
       trading-db:
+        condition: service_healthy
+      data-bus:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5004/api/summary"]
