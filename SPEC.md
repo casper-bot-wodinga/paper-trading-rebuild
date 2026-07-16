@@ -3,7 +3,7 @@
 > **META-SPEC**: [ai-project-system v0.22](https://github.com/openclaw/openclaw/blob/main/docs/ai-project-system/META-SPEC.md)
 > **Repo**: `Tesselation-Studios/paper-trading-rebuild`
 > **Status**: Built + evolving — 3 traders live, Postgres native, webhook comms active
-> **Updated**: 2026-07-09
+> **Updated**: 2026-07-15
 >
 > This file is the **master index**. Each subsystem has its own spec in `specs/` with
 > implementation details. Details here are architecture-wide — everything else lives downstream.
@@ -170,9 +170,9 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 
 ---
 
-## Current State Assessment (2026-07-10)
+## Current State Assessment (2026-07-15)
 
-> This section tracks drift between the SPEC's aspirational architecture and the live running system. Updated by Fusion Router review on 2026-07-10.
+> This section tracks drift between the SPEC's aspirational architecture and the live running system. Updated by Fusion Router review on 2026-07-10. Last updated 2026-07-15 (issue #148 resolution).
 
 ### 🔴 Critical Drift
 
@@ -180,8 +180,14 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 |---|---|---|
 | "LLM never touches a tool during a trading tick" — pre-assembled prompt | AGENTS.md lists 4+ tool calls per tick (`curl`, `python3 skill_*.py`, etc.) | 2-7 min per tick wasted on tool execution; P99 timeout risk |
 | Drawdown >15% → knockout, score=0 | Aldridge at 75% max DD, still trading | Circuit breaker not implemented — knocked-out trader still positions |
-| `prompts/{trader}.txt` is prompt source | `~/projects/trading-agent-prompts/{trader}/AGENTS.md` is source | Path mismatch; prompts live outside the repo |
+
 | JSON schema: `decision`/`conviction`/`rationale` | Live uses `action`/`confidence`/`reasoning` | Incompatible parsers; downstream tools read wrong fields |
+
+### ✅ Resolved (2026-07-15)
+
+| SPEC Claim | Resolution |
+|---|---|
+| `prompts/{trader}.txt` is prompt source | **Fixed (#148)** — Canonical `prompts/{kairos,aldridge,stonks}.txt` templates now live in the repo with `{regime}`, `{signal_report}`, `{portfolio_state}`, `{journal_entries}` placeholders. Templates use `decision`/`conviction`/`rationale` schema (aligned with #147). `scripts/sync_prompts.sh` provides backward compat mirror to `trading-agent-prompts/` during migration. |
 
 ### 🟡 Significant Drift
 
