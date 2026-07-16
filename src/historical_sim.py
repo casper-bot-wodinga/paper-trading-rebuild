@@ -354,8 +354,8 @@ def cmd_sweep(args):
     tickers = [t.strip().upper() for t in tickers_str.split(",")]
     days = args.days
     variants = args.variants or 3
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    end_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=days+1)).strftime("%Y-%m-%d")
 
     log.info("Sweep: trader=%s tickers=%s days=%d variants=%d",
              trader, tickers, days, variants)
