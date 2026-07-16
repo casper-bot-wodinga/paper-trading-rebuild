@@ -173,8 +173,8 @@ def step_cache_bars(
         print(f"  Missing date-ticker pairs: {len(missing)} "
               f"(will be skipped — backfill them first)")
 
-    # Cache into SQLite
-    n_rows = loader.to_sqlite_cache(
+    # Cache into Postgres (falls back to SQLite if unavailable)
+    n_rows = loader.to_cache(
         tickers=tickers,
         start_date=start_date,
         end_date=end_date,
