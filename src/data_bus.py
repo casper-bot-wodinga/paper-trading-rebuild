@@ -842,8 +842,19 @@ def _fetch_alpaca_historical_bars(
 
         # Parse dates
         try:
+            from datetime import date as _date
             start_ts = pd.Timestamp(start_date, tz="America/New_York")
-            end_ts = pd.Timestamp(end_date, tz="America/New_York") + pd.Timedelta(days=1)
+            end_ts = pd.Timestamp(end_date, tz="America/New_York")
+            # Clamp end_date to yesterday to avoid bad data from incomplete
+            # trading day (Alpaca IEX can return flat/placeholder bars for today)
+            today = _date.today()
+            end_date_dt = end_ts.date()
+            if end_date_dt >= today:
+                yesterday = today - pd.Timedelta(days=1)
+                log.info("Clamping end_date %s → %s (exclude today)",
+                         end_date, yesterday.strftime("%Y-%m-%d"))
+                end_ts = pd.Timestamp(yesterday, tz="America/New_York")
+            end_ts = end_ts + pd.Timedelta(days=1)  # make inclusive
         except Exception as e:
             log.warning("Invalid date params: %s", e)
             return {}

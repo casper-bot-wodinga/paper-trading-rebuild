@@ -24,7 +24,7 @@ import tempfile
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 # ── Path setup ───────────────────────────────────────────────────────────────
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -88,6 +88,33 @@ except ImportError:
     ta = None
 
 
+# ── Data quality validation ──────────────────────────────────────────────────
+# Minimum distinct close prices per trading date to consider bars valid.
+# A healthy 6.5h day has ~78 5-min bars. Bad data (flat prices) has 1-5.
+MIN_DISTINCT_CLOSES_PER_DATE = 20
+MIN_BARS_PER_DATE = 30  # at least a half-day of trading
+
+
+def validate_bars(df: pd.DataFrame, ticker: str) -> Tuple[bool, List[str]]:
+    """Validate bar data quality. Returns (is_valid, list_of_issues)."""
+    issues: List[str] = []
+    if df is None or df.empty:
+        return False, ["empty DataFrame"]
+    df_dates = df["timestamp"].dt.date
+    for d, grp in df.groupby(df_dates):
+        date_str = d.strftime("%Y-%m-%d")
+        n_bars = len(grp)
+        n_distinct = grp["close"].nunique()
+        close_range = grp["close"].max() - grp["close"].min()
+        if n_bars < MIN_BARS_PER_DATE:
+            issues.append(f"{date_str}: only {n_bars} bars (min {MIN_BARS_PER_DATE})")
+        if n_distinct < MIN_DISTINCT_CLOSES_PER_DATE:
+            issues.append(f"{date_str}: {n_distinct} distinct closes (min {MIN_DISTINCT_CLOSES_PER_DATE}), range=${close_range:.2f}")
+        if close_range <= 0:
+            issues.append(f"{date_str}: zero close range (all bars identical)")
+    return len(issues) == 0, issues
+
+
 def existing_dates(ticker: str) -> Set[str]:
     path = BARS_DIR / f"{ticker}.parquet"
     if not path.exists():
@@ -100,17 +127,49 @@ def existing_dates(ticker: str) -> Set[str]:
         return set()
 
 
+def bad_dates_in_cache(ticker: str) -> List[str]:
+    """Find dates with bad bar data in the existing cache file."""
+    path = BARS_DIR / f"{ticker}.parquet"
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_parquet(path)
+        _, issues = validate_bars(df, ticker)
+        bad_dates = sorted(set(i.split(":")[0] for i in issues))
+        return bad_dates
+    except Exception:
+        return []
+
+
 def missing_date_range(
     ticker: str,
     days: int,
     existing: Optional[Set[str]] = None,
+    repair_dates: Optional[Set[str]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
+    """Determine the date range to fetch.
+
+    Excludes today (incomplete trading day) to avoid Alpaca IEX
+    returning placeholder/flat data for the current session.
+
+    If repair_dates is passed, those dates are always included as missing.
+    """
     if existing is None:
         existing = existing_dates(ticker)
 
+    # Exclude today — Alpaca IEX returns bad data for incomplete trading days
     today = date.today()
-    end_date = today
+    end_date = today - timedelta(days=1)
+
+    # On Monday, skip back to Friday (weekend has no trading)
+    if today.weekday() == 0:
+        end_date = today - timedelta(days=3)
+
     start_date = today - timedelta(days=days + 1)
+
+    # If end_date moved past start_date, nothing to fetch
+    if end_date < start_date:
+        return None, None
 
     expected = set()
     d = start_date
@@ -118,7 +177,9 @@ def missing_date_range(
         expected.add(d.strftime("%Y-%m-%d"))
         d += timedelta(days=1)
 
-    missing = expected - existing
+    # Remove repair dates from existing set so they get re-fetched
+    effective_existing = existing - (repair_dates or set())
+    missing = expected - effective_existing
     if not missing:
         return None, None
 
@@ -180,7 +241,7 @@ def fetch_bars_alpaca(ticker: str, start: str, end: str) -> Optional[pd.DataFram
         client = StockHistoricalDataClient(api_key, secret_key)
 
         start_ts = pd.Timestamp(start, tz="America/New_York")
-        end_ts = pd.Timestamp(end, tz="America/New_York") + pd.Timedelta(days=1)
+        end_ts = pd.Timestamp(end, tz="America/New_York")
 
         request_params = StockBarsRequest(
             symbol_or_symbols=[ticker],
@@ -270,6 +331,7 @@ def atomic_write(df: pd.DataFrame, final_path: Path) -> None:
 def backfill_ticker(
     ticker: str,
     days: int,
+    repair: bool = False,
     force: bool = False,
     check_only: bool = False,
     verbose: bool = False,
@@ -277,8 +339,20 @@ def backfill_ticker(
     cache_path = BARS_DIR / f"{ticker}.parquet"
     exist_dates = existing_dates(ticker)
 
+    # Gather dates that need repair (bad data in cache)
+    repair_set: Optional[Set[str]] = None
+    if repair:
+        bad_dates = bad_dates_in_cache(ticker)
+        if bad_dates:
+            repair_set = set(bad_dates)
+            if verbose:
+                print(f"  {ticker}: detected {len(bad_dates)} bad dates to repair: "
+                      f"{', '.join(bad_dates[:5])}"
+                      f"{'...' if len(bad_dates) > 5 else ''}")
+
     if not force:
-        start_str, end_str = missing_date_range(ticker, days, existing=exist_dates)
+        start_str, end_str = missing_date_range(ticker, days, existing=exist_dates,
+                                                  repair_dates=repair_set)
         if start_str is None:
             if verbose:
                 print(f"  {ticker}: fully covered ({len(exist_dates)} dates), skipping")
@@ -286,7 +360,7 @@ def backfill_ticker(
     else:
         today = date.today()
         start_str = (today - timedelta(days=days + 1)).strftime("%Y-%m-%d")
-        end_str = today.strftime("%Y-%m-%d")
+        end_str = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if check_only:
         start_str, end_str = missing_date_range(ticker, days, existing=exist_dates)
@@ -318,8 +392,23 @@ def backfill_ticker(
         print(f"  {ticker}: no data returned", file=sys.stderr)
         return ticker, "empty", 0
 
+    # Validate data quality before caching (P0 guard — identical close prices)
+    is_valid, issues = validate_bars(new_df, ticker)
+    if not is_valid:
+        print(f"  {ticker}: data quality FAILED — discarding bad data:", file=sys.stderr)
+        for issue in issues:
+            print(f"    {issue}", file=sys.stderr)
+        return ticker, "invalid", 0
+
     new_df = compute_indicators(new_df)
     merged = merge_and_dedup(cache_path, new_df)
+    # Re-validate after merge (catches propagation of bad data from cache)
+    merged_valid, merged_issues = validate_bars(merged, ticker)
+    if not merged_valid:
+        print(f"  {ticker}: merged data FAILED validation — discarding:", file=sys.stderr)
+        for issue in merged_issues:
+            print(f"    {issue}", file=sys.stderr)
+        return ticker, "invalid", 0
     merged = compute_indicators(merged)
     atomic_write(merged, cache_path)
 
@@ -343,6 +432,10 @@ def main():
     parser.add_argument(
         "--days", type=int, default=20,
         help="Number of days to look back (default: 20)",
+    )
+    parser.add_argument(
+        "--repair", action="store_true",
+        help="Detect and re-fetch dates with bad bar data (flat close prices, etc.)",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -375,7 +468,7 @@ def main():
 
     for ticker in tickers:
         status, label, count = backfill_ticker(
-            ticker, args.days, force=args.force,
+            ticker, args.days, repair=args.repair, force=args.force,
             check_only=args.check, verbose=args.verbose,
         )
         if status == "ok":
