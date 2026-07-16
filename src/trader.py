@@ -236,23 +236,25 @@ class Trader:
         ticker = tick.ticker
         price = tick.close
 
-        # 0. Agent circuit breaker guard — skip if paused
-        if self.agent_breaker.is_paused():
-            _, reason = self.agent_breaker.check_paused()
-            # Build a minimal signal report for journaling
-            from datetime import datetime as dt
+        # 0. Shared zero-signal helper for journaling blocked/skipped ticks
+        from datetime import datetime as dt
+        def _zero_signal(regime: str = "BLOCKED"):
             ts = getattr(tick, "timestamp", dt.now())
-            zero_signal = SignalReport(
+            return SignalReport(
                 ticker=ticker, timestamp=ts,
                 momentum_score=0.0, momentum_signal="neutral",
                 rsi=50.0, rsi_signal="neutral",
                 volatility=0.0, volatility_regime="unknown",
-                regime="PAUSED", regime_confidence=0.0, regime_weight=0.0,
+                regime=regime, regime_confidence=0.0, regime_weight=0.0,
                 recommended_size_pct=0.0, max_positions=0,
                 stop_loss=0.0, take_profit=0.0,
                 composite_signal=0.0, conviction=0.0,
             )
-            self._journal(tick, zero_signal, "SKIPPED",
+
+        # 0a. Agent circuit breaker guard — skip if paused
+        if self.agent_breaker.is_paused():
+            _, reason = self.agent_breaker.check_paused()
+            self._journal(tick, _zero_signal("PAUSED"), "SKIPPED",
                           f"Circuit breaker paused: {reason}")
             log.warning("[%s] Tick SKIPPED — circuit breaker paused: %s",
                         self.trader_id, reason)
@@ -263,6 +265,31 @@ class Trader:
         self.state.ticks_processed += 1
         metrics.increment("trader.tick.received",
                           tags={"trader": self.trader_id})
+
+        # 0b. MARGIN PROTECTION GATE — block new buys when cash is critically low
+        #     Spec: 100K paper portfolios with NO margin trading.
+        #     If cash goes negative (Alpaca auto-extends margin), we must stop
+        #     opening new positions immediately.
+        MARGIN_SAFETY_PCT = 0.10  # block new buys when cash < 10% of equity
+        cash_safety = self.state.equity * MARGIN_SAFETY_PCT
+        if self.state.cash <= 0:
+            self._journal(tick, _zero_signal(), "BLOCKED",
+                          f"MARGIN PROTECTION: cash ${self.state.cash:,.2f} — "
+                          f"no margin trading allowed per spec")
+            metrics.increment("trader.decision.blocked",
+                              tags={"trader": self.trader_id, "gate": "margin_protection"})
+            log.warning("[%s] BUY blocked — negative cash $%.2f", self.trader_id, self.state.cash)
+            return None
+        if self.state.cash < cash_safety:
+            self._journal(tick, _zero_signal(), "BLOCKED",
+                          f"MARGIN WARNING: cash ${self.state.cash:,.2f} < "
+                          f"{MARGIN_SAFETY_PCT*100:.0f}% safety floor ${cash_safety:,.2f} — "
+                          f"blocking new buys to protect portfolio")
+            metrics.increment("trader.decision.blocked",
+                              tags={"trader": self.trader_id, "gate": "margin_protection"})
+            log.warning("[%s] BUY blocked — cash $%.2f below %.0f%% safety floor",
+                        self.trader_id, self.state.cash, MARGIN_SAFETY_PCT * 100)
+            return None
 
         # 1. Signal engine: compute indicators
         try:
