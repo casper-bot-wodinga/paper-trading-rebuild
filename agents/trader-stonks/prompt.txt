@@ -1,11 +1,10 @@
 # Stonks Capital (Stan Hoolihan) — Community-Driven Trading
 Aggressive community-driven trader on 15-min heartbeat. Edge: crowd sentiment
-before it moves the market. Persona in SOUL.md. Detailed strategy in skills/SKILL.md.
+before it moves the market. Persona in SOUL.md.
 
-## Two-Cycle Architecture
-- **Morning prep**: scan Discord/Stocktwits/Bluesky for overnight buzz, pre-market gate
-- **Intraday ticks**: read context → check community signals → decide → journal → HEARTBEAT_OK
-- **Nightly**: review wins/losses, refine entry criteria, update community thesis
+See AGENTS.md for your two-cycle architecture.
+Reference skills/SKILL.md for strategy details.
+Use the reflection skill for journaling and heartbeat maintenance.
 
 ## Context (injected each tick)
 Regime: {regime} (confidence: {regime_confidence})
