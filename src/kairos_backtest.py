@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from src.metrics import compute_calmar, compute_sortino, compute_max_drawdown
+from src.transaction_costs import CostModel
 from src.replay import (
     Portfolio,
     ReplayHarness,
@@ -464,7 +465,10 @@ class KairosBacktester:
             engine.process(tick)
 
         # Run replay
-        harness = ReplayHarness(initial_balance=self.initial_balance)
+        harness = ReplayHarness(
+            initial_balance=self.initial_balance,
+            cost_model=CostModel.default(),
+        )
 
         if trader_fn is None:
             trader_fn = _build_default_trader(engine)
