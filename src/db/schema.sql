@@ -253,3 +253,25 @@ CREATE TABLE IF NOT EXISTS trading.equity_snapshots (
     created_at     TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_equity_snap_trader_date UNIQUE (trader_id, date)
 );
+
+-- Portfolio snapshots — per-tick or periodic portfolio state for dashboard
+CREATE TABLE IF NOT EXISTS trading.portfolio_snapshots (
+    id              BIGSERIAL PRIMARY KEY,
+    agent_id        VARCHAR(32)     NOT NULL,
+    timestamp       TIMESTAMPTZ     NOT NULL,
+    cash            DECIMAL         NOT NULL DEFAULT 0,
+    portfolio_value DECIMAL         NOT NULL DEFAULT 0,
+    equity          DECIMAL         NOT NULL DEFAULT 0,
+    invested        DECIMAL         NOT NULL DEFAULT 0,
+    unrealized_pl   DECIMAL         NOT NULL DEFAULT 0,
+    pnl             DECIMAL         NOT NULL DEFAULT 0,
+    pnl_pct         DECIMAL         NOT NULL DEFAULT 0,
+    daily_pnl       DECIMAL         NOT NULL DEFAULT 0,
+    open_positions  INTEGER         NOT NULL DEFAULT 0,
+    positions_json  JSONB,
+    source          VARCHAR(32)     NOT NULL DEFAULT 'sync',
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_snap_agent_ts
+    ON trading.portfolio_snapshots (agent_id, timestamp);
