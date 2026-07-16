@@ -106,6 +106,15 @@ Every night, the same metrics are computed for SPY buy-and-hold. If a trader can
 
 ---
 
+## Related Repos
+
+| Repo | Contains |
+|------|----------|
+| [paper-trading-agents](https://github.com/Tesselation-Studios/paper-trading-agents) | Strategy files, prompt templates, reference docs — deployed to OpenClaw VM |
+| [paper-trading-rebuild](https://github.com/Tesselation-Studios/paper-trading-rebuild) | Engine code: data bus, signal engine, replay, dashboard, CI/CD |
+
+---
+
 ## Key Numbers
 
 | Metric | Value |
@@ -216,4 +225,4 @@ Source of truth: `~/.hermes/homelab.env`
 | **Kairos Journal** | Hermes cron | Odd hours (9:30, 11:30, 1:30, 3:30 ET) |
 | **Trader Heartbeat** | Hermes cron | Every 2 min |
 | **Overnight Learning** | Hermes cron | 3 AM ET |
-| **Dashboard** | `http://192.168.1.41:5002` | Live |
+| **Trader Agent Prompts** | [paper-trading-agents](https://github.com/Tesselation-Studios/paper-trading-agents) | Strategy files, prompt templates — deployed to OpenClaw VM |
