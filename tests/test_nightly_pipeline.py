@@ -95,7 +95,9 @@ class TestStepBackfill:
         assert elapsed > 0
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
-        assert "backfill_bars.py" in str(args[-1]) or "backfill_bars.py" in " ".join(args)
+        # The script may be backfill_bars.py or backfill_bars_alpaca.py
+        cmd_str = " ".join(args)
+        assert "backfill_bars" in cmd_str
         assert "--tickers" in args
         assert "core" in args
         assert "--days" in args
@@ -156,7 +158,7 @@ class TestStepCacheBars:
             # Need to patch BarLoader's default paths
             with patch("scripts.nightly_pipeline.BarLoader") as MockLoader:
                 instance = MockLoader.return_value
-                instance.to_sqlite_cache.return_value = 10
+                instance.to_cache.return_value = 10
                 instance.available_dates.return_value = ["2026-07-01"]
 
                 n = step_cache_bars(

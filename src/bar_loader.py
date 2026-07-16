@@ -13,7 +13,7 @@ Usage:
     ticks = bl.load_date_range(["SPY", "AAPL"], "2026-06-30", "2026-07-02")
     dates = bl.available_dates("SPY")
     missing = bl.missing_dates(["SPY", "AAPL"], "2026-06-20", "2026-07-05")
-    count = bl.to_sqlite_cache(["SPY", "AAPL"], "2026-06-30", "2026-07-02")
+    count = bl.to_cache(["SPY", "AAPL"], "2026-06-30", "2026-07-02")
     
     # Remote mode (data bus API):
     bl_remote = BarLoader(data_bus_url="http://192.168.1.41:5000")
@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -33,6 +32,18 @@ import numpy as np
 import pandas as pd
 
 from src.replay import Tick
+
+# Postgres connection for cache operations
+_DB_URL = "postgresql://trader:@192.168.1.179:5433/trading"
+
+
+def _pg_conn():
+    """Get a sync psycopg2 connection (lazy import)."""
+    import psycopg2
+    import psycopg2.extras
+    conn = psycopg2.connect(_DB_URL)
+    conn.autocommit = False
+    return conn
 
 try:
     import requests
@@ -89,7 +100,7 @@ class BarLoader:
 
     Args:
         bars_dir: Directory containing <ticker>.parquet files (local mode only).
-        db_path: SQLite database for caching replay ticks.
+        db_path: Deprecated. Cache now uses Postgres. Kept for backwards compat.
         data_bus_url: Data bus URL for remote mode. If set, uses HTTP API
             instead of local parquet files. Reads from env DATA_BUS_URL if
             not explicitly provided.
@@ -102,6 +113,7 @@ class BarLoader:
         data_bus_url: Optional[str] = None,
     ):
         self.bars_dir = Path(bars_dir) if bars_dir else DEFAULT_BARS_DIR
+        # db_path kept for backwards compat — cache now uses Postgres
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self.data_bus_url = data_bus_url or os.environ.get("DATA_BUS_URL", "")
         self._remote_mode = bool(self.data_bus_url)
@@ -197,16 +209,17 @@ class BarLoader:
 
         return missing
 
-    def to_sqlite_cache(
+    def to_cache(
         self,
         tickers: List[str],
         start_date: str,
         end_date: str,
         interval_minutes: int = 30,
     ) -> int:
-        """Pre-load bars into SQLite for faster repeated queries.
+        """Pre-load bars into Postgres for faster repeated queries.
 
-        Creates (or recreates) a ``replay_ticks`` table in the database.
+        Creates (or recreates) the ``market_data.replay_ticks`` table.
+        Falls back to SQLite if Postgres is unavailable (tests/CI).
 
         Args:
             tickers: List of ticker symbols.
@@ -217,8 +230,84 @@ class BarLoader:
         Returns:
             Number of rows inserted.
         """
-        ticks = self.load_date_range(tickers, start_date, end_date, interval_minutes=interval_minutes)
+        ticks = self.load_date_range(tickers, start_date, end_date,
+                                     interval_minutes=interval_minutes)
 
+        if not ticks:
+            return 0
+
+        # Try Postgres first; fall back to SQLite for CI/test environments
+        try:
+            return self._to_cache_pg(ticks)
+        except Exception as e:
+            log.debug("Postgres cache write failed (%s), falling back to SQLite", e)
+            return self._to_cache_sqlite(ticks)
+
+    def _to_cache_pg(self, ticks: List[Tick]) -> int:
+        """Write ticks to Postgres market_data.replay_ticks."""
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                # Ensure table exists (idempotent — migration 012 also creates it)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS market_data.replay_ticks (
+                        id          BIGSERIAL PRIMARY KEY,
+                        timestamp   TIMESTAMPTZ     NOT NULL,
+                        ticker      VARCHAR(10)     NOT NULL,
+                        open        DECIMAL         NOT NULL,
+                        high        DECIMAL         NOT NULL,
+                        low         DECIMAL         NOT NULL,
+                        close       DECIMAL         NOT NULL,
+                        volume      BIGINT          NOT NULL DEFAULT 0,
+                        rsi         DECIMAL,
+                        momentum    DECIMAL,
+                        volatility  DECIMAL,
+                        regime      VARCHAR(32)
+                    )
+                """)
+                cur.execute("DELETE FROM market_data.replay_ticks")
+
+                rows = [
+                    (
+                        t.timestamp,
+                        t.ticker,
+                        t.open,
+                        t.high,
+                        t.low,
+                        t.close,
+                        t.volume,
+                        t.rsi,
+                        t.momentum,
+                        t.volatility,
+                        t.regime,
+                    )
+                    for t in ticks
+                ]
+
+                import psycopg2.extras
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO market_data.replay_ticks
+                        (timestamp, ticker, open, high, low, close, volume,
+                         rsi, momentum, volatility, regime)
+                    VALUES %s
+                    """,
+                    rows,
+                    template="(%s::timestamptz, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                )
+                n = cur.rowcount
+            conn.commit()
+            return n
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _to_cache_sqlite(self, ticks: List[Tick]) -> int:
+        """SQLite fallback for CI/test environments without Postgres."""
+        import sqlite3
         conn = sqlite3.connect(str(self.db_path))
         try:
             conn.execute("DROP TABLE IF EXISTS replay_ticks")
@@ -276,13 +365,28 @@ class BarLoader:
         finally:
             conn.close()
 
+    def to_sqlite_cache(
+        self,
+        tickers: List[str],
+        start_date: str,
+        end_date: str,
+        interval_minutes: int = 30,
+    ) -> int:
+        """Deprecated. Use to_cache() instead.
+
+        Delegates to to_cache() which writes to Postgres.
+        """
+        return self.to_cache(tickers, start_date, end_date, interval_minutes)
+
     def load_from_cache(
         self,
         tickers: Optional[List[str]] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> List[Tick]:
-        """Load ticks from the SQLite cache instead of Parquet.
+        """Load ticks from the Postgres replay_ticks cache.
+
+        Falls back to SQLite if Postgres is unavailable (tests/CI).
 
         Args:
             tickers: Filter by tickers (None = all).
@@ -292,16 +396,100 @@ class BarLoader:
         Returns:
             List of Tick objects.
         """
+        # Try Postgres first; fall back to SQLite for CI/test environments
+        try:
+            return self._load_from_cache_pg(tickers, start_date, end_date)
+        except Exception as e:
+            log.debug("Postgres cache read failed (%s), falling back to SQLite", e)
+            return self._load_from_cache_sqlite(tickers, start_date, end_date)
+
+    def _load_from_cache_pg(
+        self,
+        tickers: Optional[List[str]],
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> List[Tick]:
+        """Read ticks from Postgres market_data.replay_ticks."""
+        conn = _pg_conn()
+        try:
+            with conn.cursor() as cur:
+                # Check if table exists
+                cur.execute(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables "
+                    "WHERE table_schema = 'market_data' AND table_name = 'replay_ticks')"
+                )
+                if not cur.fetchone()[0]:
+                    return []
+
+                query = (
+                    "SELECT timestamp, ticker, open, high, low, close, volume, "
+                    "rsi, momentum, volatility, regime "
+                    "FROM market_data.replay_ticks WHERE 1=1"
+                )
+                params: list = []
+
+                if tickers:
+                    query += " AND ticker = ANY(%s)"
+                    params.append(list(tickers))
+
+                if start_date:
+                    query += " AND timestamp >= %s"
+                    params.append(start_date)
+                if end_date:
+                    query += " AND timestamp <= %s"
+                    params.append(end_date + "T23:59:59")
+
+                query += " ORDER BY timestamp ASC"
+
+                cur.execute(query, params)
+                rows = cur.fetchall()
+
+            ticks: List[Tick] = []
+            for row in rows:
+                ts = row[0]
+                if isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts)
+                ticks.append(
+                    Tick(
+                        timestamp=ts,
+                        ticker=row[1],
+                        open=float(row[2]),
+                        high=float(row[3]),
+                        low=float(row[4]),
+                        close=float(row[5]),
+                        volume=int(row[6]),
+                        rsi=float(row[7]) if row[7] is not None else None,
+                        momentum=float(row[8]) if row[8] is not None else None,
+                        volatility=float(row[9]) if row[9] is not None else None,
+                        regime=row[10],
+                    )
+                )
+            return ticks
+        except Exception:
+            raise
+        finally:
+            conn.close()
+
+    def _load_from_cache_sqlite(
+        self,
+        tickers: Optional[List[str]],
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> List[Tick]:
+        """SQLite fallback for CI/test environments without Postgres."""
+        import sqlite3
         conn = sqlite3.connect(str(self.db_path))
         try:
-            # Check if table exists
             table_check = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='replay_ticks'"
             ).fetchone()
             if not table_check:
                 return []
 
-            query = "SELECT timestamp, ticker, open, high, low, close, volume, rsi, momentum, volatility, regime FROM replay_ticks WHERE 1=1"
+            query = (
+                "SELECT timestamp, ticker, open, high, low, close, volume, "
+                "rsi, momentum, volatility, regime FROM replay_ticks WHERE 1=1"
+            )
             params: list = []
 
             if tickers:
@@ -314,7 +502,6 @@ class BarLoader:
                 params.append(start_date)
             if end_date:
                 query += " AND timestamp <= ?"
-                # Make end_date inclusive for the full day
                 params.append(end_date + "T23:59:59")
 
             query += " ORDER BY timestamp ASC"
