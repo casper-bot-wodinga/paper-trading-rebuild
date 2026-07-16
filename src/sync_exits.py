@@ -223,7 +223,7 @@ def _write_learning_entry(agent_id: str, ticker: str, trade: dict,
         conn = sqlite3.connect(str(SHARED_DB), timeout=10)
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
-            "INSERT INTO journal (agent_id, timestamp, entry, mood) VALUES (?, datetime('now'), ?, ?)",
+            "INSERT OR IGNORE INTO journal (agent_id, timestamp, entry, mood) VALUES (?, datetime('now'), ?, ?)",
             (agent_id, entry, mood),
         )
         conn.commit()

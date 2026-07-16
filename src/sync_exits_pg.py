@@ -186,7 +186,8 @@ def _write_learning_entry(agent_id: str, ticker: str, trade: dict,
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO trading.journal (trader_id, timestamp, ticker, decision, rationale, equity, drawdown_pct) "
-            "VALUES (%s, NOW(), %s, 'EXIT', %s, 0, 0)",
+            "VALUES (%s, NOW(), %s, 'EXIT', %s, 0, 0) "
+            "ON CONFLICT (trader_id, timestamp, ticker, decision, md5(COALESCE(rationale, ''))) DO NOTHING",
             (agent_id, ticker, entry),
         )
         conn.commit()
