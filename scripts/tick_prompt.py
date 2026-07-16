@@ -167,7 +167,11 @@ def build_quotes_table(snapshot: dict, symbols: list[str]) -> str:
 
 
 def build_market_context(snapshot: dict) -> str:
-    """Build market context section."""
+    """Build market context section.
+
+    Per SPEC #149: Uses K-Means regime detection (10-feature clustering)
+    with fallback to the rule-based data bus regime if the model is unavailable.
+    """
     parts = []
 
     # Fear & Greed
@@ -177,12 +181,38 @@ def build_market_context(snapshot: dict) -> str:
         fg_class = fg.get("classification", "?")
         parts.append(f"Fear & Greed: {fg_val} ({fg_class})")
 
-    # Regime
-    regime = snapshot.get("regime", {})
-    if regime and "error" not in regime:
-        regime_label = regime.get("regime", regime.get("label", "?"))
-        regime_conf = regime.get("confidence", "?")
-        parts.append(f"Market Regime: {regime_label} (confidence: {regime_conf})")
+    # Regime — K-Means detection (SPEC #149) with data bus fallback
+    regime_label: str = "?"
+    regime_conf: str = "?"
+    regime_source: str = ""
+
+    # Try K-Means regime detector first
+    try:
+        from src.regime_detector import RegimeDetector
+        detector = RegimeDetector()
+        if detector.load():
+            result = detector.classify_latest()
+            regime_label = result.regime
+            regime_conf = f"{result.confidence:.2f}"
+            regime_source = " (K-Means)"
+    except Exception as e:
+        print(
+            f"[tick_prompt] K-Means regime detection failed: {e}. "
+            f"Falling back to data bus.\n",
+            file=sys.stderr,
+        )
+
+    # Fallback: data bus rule-based regime
+    if not regime_source:
+        regime = snapshot.get("regime", {})
+        if regime and "error" not in regime:
+            regime_label = regime.get("regime", regime.get("label", "?"))
+            regime_conf = str(regime.get("confidence", "?"))
+            regime_source = " (rule-based)"
+
+    parts.append(
+        f"Market Regime: {regime_label} (confidence: {regime_conf}){regime_source}"
+    )
 
     # VIX
     quotes = snapshot.get("quotes", {})
