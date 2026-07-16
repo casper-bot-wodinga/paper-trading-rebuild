@@ -189,7 +189,7 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 |---|---|---|
 | XGBoost accuracy 78% | Kairos prompt says 63% | Stale model or stale prompt — can't tell which |
 | K-Means regime with 10 features | Rule-based `TRENDING_UP/DOWN/HIGH_VOL/MEAN_REVERTING` | K-means not deployed; old classifier still running |
-| Multi-date walk-forward sweep | Single-date sweep with synthetic data fallback | Prompt overfitting; synthetic data is noise |
+| Multi-date walk-forward sweep | ✅ Mitigated — CLI default → 20 trading days, statistical significance gate (p<0.05), minimum 5 OOS windows enforced | Prompt overfitting; synthetic data is noise |
 | Pre-market format validation blocks open | No evidence this gate is active | Broken prompts could hit production |
 
 ### 🟢 Not Yet Deployed

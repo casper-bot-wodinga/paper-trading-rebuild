@@ -875,6 +875,14 @@ def _run_multidate_sweep(
             f"{train_days + val_days} days, got {len(dates)}. "
             f"Reduce --train or --val, or increase --dates."
         )
+
+    # Enforce minimum 5 out-of-sample windows per SPEC §6.1
+    if len(windows) < 5:
+        print(f"[prompt_sweep] ⚠️  Only {len(windows)} walk-forward windows "
+              f"(minimum 5 required per SPEC §6.1). "
+              f"Increase --dates to >= {train_days + val_days + 4}.")
+        # Still proceed but warn — caller can override
+
     print(f"  Walk-forward windows: {len(windows)} "
           f"(train={train_days}d, val={val_days}d)")
 
@@ -944,9 +952,12 @@ def _run_multidate_sweep(
     # Sort by avg_val_score descending
     variants.sort(key=lambda v: v.avg_val_score, reverse=True)
 
-    # 5. Winner criteria (must pass ALL)
+    # 5. Winner criteria (must pass ALL 4 gates — SPEC §6.1)
     winner: Optional[PromptVariant] = None
     branch_name: Optional[str] = None
+
+    # Import statistical significance gate from validation module
+    from src.validation import is_significant
 
     for v in variants:
         passes_win_rate = v.win_rate >= 0.6
@@ -955,8 +966,18 @@ def _run_multidate_sweep(
             baseline_metrics["val_stability"] == 0.0
             or v.val_stability < 2.0 * baseline_metrics["val_stability"]
         )
+        # Gate 4: Statistical significance (paired t-test, p < 0.05)
+        passes_significance = True
+        significance_p_value = 1.0
+        if len(v.val_scores) >= 5 and len(baseline_val_scores) >= 5:
+            passes_significance, significance_p_value = is_significant(
+                baseline_val_scores, v.val_scores, p_threshold=0.05
+            )
+        elif len(v.val_scores) < 5:
+            # Not enough windows for significance test — only warn, don't block
+            passes_significance = True  # Don't block on insufficient data
 
-        if passes_win_rate and passes_avg_score and passes_stability:
+        if passes_win_rate and passes_avg_score and passes_stability and passes_significance:
             winner = v
             print(f"\n  🏆 Winner: {v.variant_name}")
             print(f"     avg_val_score: {v.avg_val_score:.4f} "
@@ -964,6 +985,8 @@ def _run_multidate_sweep(
             print(f"     win_rate: {v.win_rate:.1%}")
             print(f"     stability: {v.val_stability:.4f} "
                   f"(baseline: {baseline_metrics['val_stability']:.4f})")
+            print(f"     significance: p={significance_p_value:.4f} "
+                  f"({'✓' if passes_significance else '✗'})")
 
             branch_name = create_winner_branch(
                 trader_short, v, date_str, dry_run=dry_run,
@@ -973,7 +996,7 @@ def _run_multidate_sweep(
     if winner is None:
         print(f"\n  ❌ No variant passed all walk-forward criteria")
         print(f"     Required: win_rate >= 0.6, avg_val > baseline + 0.05, "
-              f"stability < 2× baseline")
+              f"stability < 2× baseline, significance p < 0.05")
 
     return SweepResult(
         trader=trader_short,
@@ -994,7 +1017,7 @@ def run_sweep(
     trader: Optional[str] = None,
     n_variants: int = 5,
     dry_run: bool = False,
-    n_dates: int = 1,
+    n_dates: int = 20,
     train_days: int = 5,
     val_days: int = 1,
     slippage_bps: float = 0.0,

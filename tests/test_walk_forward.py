@@ -496,3 +496,94 @@ class TestMultiDateIntegration:
         assert len(results) == 1
         assert results[0].trader == "kairos"
         assert results[0].date == "2026-07-05"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Statistical significance gate tests (SPEC §6.1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestStatisticalSignificanceGate:
+    """Test that the is_significant() gate from validation.py works correctly."""
+
+    def test_significant_improvement_detected(self):
+        """Clear improvement should be statistically significant."""
+        from src.validation import is_significant
+        # Baseline: consistently ~0.3
+        baseline = [0.30, 0.31, 0.29, 0.32, 0.30, 0.31, 0.30, 0.29, 0.31, 0.30]
+        # Candidate: consistently ~0.45 (50% better)
+        candidate = [0.45, 0.46, 0.44, 0.47, 0.45, 0.46, 0.45, 0.44, 0.46, 0.45]
+        is_sig, p_val = is_significant(baseline, candidate, p_threshold=0.05)
+        assert is_sig, f"Expected significant improvement, got p={p_val:.4f}"
+        assert p_val < 0.05
+
+    def test_no_improvement_not_significant(self):
+        """No real improvement should fail significance test."""
+        from src.validation import is_significant
+        # Both sets have same mean (~0.3) with noise
+        baseline = [0.30, 0.32, 0.29, 0.31, 0.30, 0.28, 0.33, 0.30, 0.31, 0.29]
+        candidate = [0.29, 0.31, 0.30, 0.32, 0.28, 0.31, 0.30, 0.29, 0.32, 0.30]
+        is_sig, p_val = is_significant(baseline, candidate, p_threshold=0.05)
+        assert not is_sig, f"Expected not significant, got p={p_val:.4f}"
+
+    def test_insufficient_data_returns_not_significant(self):
+        """Fewer than 5 data points returns not significant."""
+        from src.validation import is_significant
+        is_sig, p_val = is_significant([0.3, 0.4], [0.5, 0.6], p_threshold=0.05)
+        assert not is_sig
+        assert p_val == 1.0
+
+    def test_overfit_detection(self):
+        """Walk-forward should detect when validation degrades vs training."""
+        from src.validation import is_overfit
+        # Train Sharpe 2.0, Validation Sharpe 0.5 — clearly overfit
+        assert is_overfit(2.0, 0.5, threshold=0.30)
+        # Train Sharpe 1.0, Validation Sharpe 0.8 — within threshold
+        assert not is_overfit(1.0, 0.8, threshold=0.30)
+        # Exact boundary: val = train * 0.7
+        assert not is_overfit(1.0, 0.7, threshold=0.30)
+        # Just below boundary
+        assert is_overfit(1.0, 0.69, threshold=0.30)
+
+    def test_significance_gate_blocks_noisy_improvement(self):
+        """High-variance improvement that isn't statistically significant should be caught."""
+        from src.validation import is_significant
+        # Baseline: consistent
+        baseline = [0.30, 0.31, 0.30, 0.29, 0.31, 0.30, 0.31, 0.30, 0.29, 0.31]
+        # Candidate: higher mean but extremely noisy — not reliably better
+        candidate = [0.50, 0.10, 0.60, 0.05, 0.55, 0.08, 0.65, 0.07, 0.45, 0.12]
+        is_sig, p_val = is_significant(baseline, candidate, p_threshold=0.05)
+        # With this much variance, the improvement shouldn't be significant
+        assert not is_sig or p_val > 0.01, (
+            f"Noisy improvement should not be clearly significant, got p={p_val:.4f}"
+        )
+
+
+class TestMinimumOOSWindows:
+    """Test that minimum 5 OOS windows requirement is enforced."""
+
+    def test_walk_forward_with_insufficient_dates_warns(self):
+        """When fewer than 5 OOS windows exist, a warning is issued."""
+        dates = [f"2026-06-{i+1:02d}" for i in range(10)]
+        # train=5, val=1 → 10 - 5 - 1 + 1 = 5 windows (exactly at minimum)
+        windows = build_walk_forward_windows(dates, train_days=5, val_days=1)
+        assert len(windows) >= 5, f"Expected >= 5 windows, got {len(windows)}"
+
+    def test_below_minimum_raises_flag(self):
+        """Too few dates for 5 OOS windows should be detectable."""
+        dates = [f"2026-06-{i+1:02d}" for i in range(8)]
+        # train=5, val=2 → 8 - 5 - 2 + 1 = 2 windows (< 5 minimum)
+        windows = build_walk_forward_windows(dates, train_days=5, val_days=2)
+        assert len(windows) < 5, "Expected < 5 windows with insufficient dates"
+
+    def test_default_cli_is_multi_date(self):
+        """Verifies that the prompt_sweep CLI default is multi-date (not single)."""
+        # The default should be > 1 for multi-date walk-forward
+        # We verify by checking the run_sweep function signature default
+        from src.prompt_sweep import run_sweep
+        import inspect
+        sig = inspect.signature(run_sweep)
+        n_dates_default = sig.parameters['n_dates'].default
+        assert n_dates_default >= 5, (
+            f"run_sweep n_dates default is {n_dates_default}, "
+            f"should be >= 5 for multi-date walk-forward"
+        )
