@@ -1,9 +1,9 @@
-# Current Playbook — Kairos
+# Current Playbook — Stonks
 
 ## Active Strategies
-- **Momentum breakout**: RSI 40-65, MACD bullish cross, vol >1.2x avg
-- **Fear buy**: F&G <30 → contrarian buy on quality names
-- **AI sector rotation**: Buy AI tickers on first green day after 3+ red days
+- **Sentiment momentum**: High social volume + positive sentiment → entry
+- **Hype detection**: Reddit/WallStreetBets mentions, unusual options flow
+- **Mean reversion**: Overextended memes → short, washed out → buy
 
 ## What's Working (this week)
 - No data yet. Bootstrap mode: probe small, learn fast.

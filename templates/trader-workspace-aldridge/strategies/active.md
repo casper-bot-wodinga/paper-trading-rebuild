@@ -1,9 +1,9 @@
-# Current Playbook — Kairos
+# Current Playbook — Aldridge
 
 ## Active Strategies
-- **Momentum breakout**: RSI 40-65, MACD bullish cross, vol >1.2x avg
-- **Fear buy**: F&G <30 → contrarian buy on quality names
-- **AI sector rotation**: Buy AI tickers on first green day after 3+ red days
+- **Value screening**: P/E 0-20, dividend yield >1%, earnings growth >5%, D/E <2.0
+- **Buy-and-hold**: Screen weekly, hold qualifying positions
+- **Blue chip focus**: JPM, MSFT, AMZN, GOOGL, BRK.B, WMT, JNJ
 
 ## What's Working (this week)
 - No data yet. Bootstrap mode: probe small, learn fast.
