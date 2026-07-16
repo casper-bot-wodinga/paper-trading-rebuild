@@ -567,6 +567,8 @@ def nightly_pipeline(
     dry_run: bool = False,
     # Trend card
     trend_card: bool = False,
+    # SPY benchmark
+    spy_benchmark: bool = False,
 ) -> Dict[str, Any]:
     """Run the full nightly optimization pipeline.
 
@@ -589,6 +591,7 @@ def nightly_pipeline(
         skip_llm: Skip LLM phase entirely (signal-only).
         dry_run: If True, skip git operations and DB writes.
         trend_card: If True, push a 7-night trend card to Canvas (weekly).
+        spy_benchmark: If True, compute SPY buy-and-hold benchmark and include in results.
 
     Returns:
         Dict with pipeline results for reporting.
@@ -811,6 +814,55 @@ def nightly_pipeline(
             print(f"[nightly] ⚠️  Trend card failed: {e}")
             result["trend_card"] = f"error: {e}"
 
+    # ═══════════════════════════════════════════════════════════════════
+    # STEP 8: SPY Benchmark (optional — compare against buy-and-hold)
+    # ═══════════════════════════════════════════════════════════════════
+    if spy_benchmark:
+        try:
+            from scripts.spy_benchmark import (
+                compute_spy_benchmark,
+                format_benchmark as fmt_spy,
+            )
+
+            print(f"\n{'='*60}")
+            print("  STEP 8/8: SPY Benchmark")
+            print(f"{'='*60}")
+
+            spy = compute_spy_benchmark(date_str=date_str, n_dates=n_dates)
+            result["spy_benchmark"] = spy
+
+            if spy.get("error"):
+                print(f"[nightly] ⚠️  SPY benchmark: {spy['error']}")
+            else:
+                print(f"[nightly] SPY {spy['start_price']} → {spy['end_price']} "
+                      f"({spy['total_return_pct']:+.2f}%) | "
+                      f"Sharpe {spy['sharpe_ratio']:.3f} | "
+                      f"Max DD {spy['max_drawdown_pct']:.2f}%")
+
+                # Push SPY benchmark card to Canvas
+                if not dry_run:
+                    try:
+                        from src.canvas_dashboard import _push_to_canvas
+
+                        spy_content = fmt_spy(spy)
+                        result_canvas = _push_to_canvas(
+                            title=f"📊 SPY Benchmark — {date_str}",
+                            content=spy_content,
+                            board="main",
+                            agent="orchestrator",
+                            emoji="📊",
+                            expires_days=7,
+                        )
+                        card_uuid = result_canvas.get("id")
+                        if card_uuid:
+                            print(f"[nightly] ✅ SPY Canvas card: {card_uuid}")
+                        result["spy_canvas_card"] = card_uuid
+                    except Exception as ce:
+                        print(f"[nightly] ⚠️  SPY Canvas card failed: {ce}")
+        except Exception as e:
+            print(f"[nightly] ⚠️  SPY benchmark failed: {e}")
+            result["spy_benchmark"] = {"error": str(e)}
+
     # ── Final summary ─────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  NIGHTLY PIPELINE COMPLETE")
@@ -940,6 +992,10 @@ Examples:
         "--trend-card", action="store_true",
         help="Push a 7-night trend card to Canvas after pipeline (weekly)",
     )
+    general.add_argument(
+        "--spy-benchmark", action="store_true",
+        help="Compute SPY buy-and-hold benchmark and push to Canvas",
+    )
 
     args = parser.parse_args()
 
@@ -963,6 +1019,7 @@ Examples:
         skip_llm=args.skip_llm,
         dry_run=args.dry_run,
         trend_card=args.trend_card,
+        spy_benchmark=args.spy_benchmark,
     )
 
     # Exit non-zero if no winners
