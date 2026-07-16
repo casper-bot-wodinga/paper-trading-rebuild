@@ -34,6 +34,7 @@ from db.connection import get_connection
 from metrics import objective_score, compute_calmar, compute_profit_factor
 from replay import ReplayHarness, Tick, Portfolio, TraderDecision, TraderFn
 from signals import SignalEngine, SignalParams
+from transaction_costs import CostModel
 
 log = logging.getLogger("nightly_replay")
 
@@ -385,6 +386,7 @@ def score_variant(params: SignalParams, ticks: List[Tick]) -> Tuple[float, Any]:
         initial_balance=100_000.0,
         max_position_pct=params.base_size_pct,
         require_conviction=0.20,
+        cost_model=CostModel.default(),
     )
     trader_fn = make_signal_trader(params, ticks)
     result = harness.run(ticks, trader_fn)

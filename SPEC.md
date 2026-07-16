@@ -205,7 +205,7 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 | Virtual traders (shadow + rotation) | Not deployed — tables don't exist | P2 |
 | K-Means regime detector (`regime_detector.py`) | Spec defined, not deployed | P3 |
 | BarLoader + backfill pipeline | Parquet data severely lopsided (61K rows on one day, 2 on others) | P1 |
-| CostModel in replay | Not implemented | P2 |
+| CostModel in replay | Implemented — wired into nightly_replay + kairos_backtest | Done |
 
 ### Live System Health
 
