@@ -410,22 +410,12 @@ def assemble_prompt(trader_id: str, db_path: str | None = None) -> str:
 ## TRADING TICK INSTRUCTIONS
 
 1. Read the market context and your watchlist quotes above.
-2. Read YOUR PROMPT for your strategy, persona, and rules.
-3. Make ONE trading decision and output it as JSON:
-```json
-{{
-  "decision": "BUY|SELL|HOLD",
-  "ticker": "AAPL",
-  "conviction": 0.0-1.0,
-  "rationale": "your reasoning in 1-2 sentences",
-  "signal_override": false,
-  "override_reason": null
-}}
-```
+2. Read YOUR PROMPT (above) for your strategy, persona, rules, and output schema.
+3. Make ONE trading decision and output it as JSON per your prompt's schema.
 4. You have NO tools. All context is pre-assembled above. Output JSON only.
 
-REMEMBER: thesis MUST be 20+ chars, signals_used MUST have at least 1 entry,
-confidence >= 0.3. A HOLD with idle cash is a missed learning opportunity.
+REMEMBER: Follow your prompt's field requirements. A HOLD with idle cash
+is a missed learning opportunity.
 """.strip()
 
     return injected
