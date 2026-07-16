@@ -461,7 +461,8 @@ def inject_test_data(agent_id: str):
         cur.execute(
             """INSERT INTO trading.journal
                (trader_id, timestamp, ticker, decision, rationale, equity, drawdown_pct, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (trader_id, timestamp, ticker, decision, md5(COALESCE(rationale, ''))) DO NOTHING""",
             (agent_id, ts, "", "REFLECTION", entry, 0.0, 0.0, ts),
         )
 
