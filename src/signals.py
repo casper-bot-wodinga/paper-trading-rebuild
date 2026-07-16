@@ -35,6 +35,25 @@ except ImportError:
 
 log = logging.getLogger("signals")
 
+# ── K-Means regime detector path ────────────────────────────────────────────
+REGIME_DETECTOR_PATH = "/home/openclaw/data/regime_kmeans.pkl"
+
+# Module-level regime cache — data_bus pushes K-Means predictions here
+# so the signal engine can read them synchronously without DB access.
+_kmeans_regime: Dict[str, Any] = {}
+
+
+def _get_regime_detector():
+    """Lazy-load the K-Means RegimeDetector from disk. Returns None if unavailable."""
+    try:
+        from src.regime_detector import RegimeDetector
+        from pathlib import Path
+        if Path(REGIME_DETECTOR_PATH).exists():
+            return RegimeDetector(k=5, model_path=REGIME_DETECTOR_PATH)
+    except Exception:
+        pass
+    return None
+
 # ── Parameter bounds ─────────────────────────────────────────────────────────
 
 
@@ -93,11 +112,18 @@ class SignalParams:
     take_profit_pct: float = 0.15          # [0.05, 0.30]
     trailing_stop_pct: float = 0.03        # [0.01, 0.08]
 
-    # Regime weights
-    weight_trending_up: float = 1.0        # [0.2, 2.0]
-    weight_trending_down: float = 0.5      # [0.0, 1.5]
-    weight_mean_reverting: float = 0.8     # [0.2, 2.0]
-    weight_high_volatility: float = 0.4    # [0.0, 1.0]
+    # Regime weights (K-Means regime labels)
+    weight_momentum_bull: float = 1.0      # [0.2, 2.0]
+    weight_momentum_bear: float = 0.5      # [0.0, 1.5]
+    weight_mean_reversion: float = 0.8     # [0.2, 2.0]
+    weight_volatility_spike: float = 0.4   # [0.0, 1.0]
+    weight_low_vol_drift: float = 0.6      # [0.0, 1.5]
+
+    # Legacy regime weights (aliased to K-Means labels for backward compat)
+    weight_trending_up: float = 1.0        # aliases → momentum_bull
+    weight_trending_down: float = 0.5      # aliases → momentum_bear
+    weight_mean_reverting: float = 0.8     # aliases → mean_reversion
+    weight_high_volatility: float = 0.4    # aliases → volatility_spike
 
     # ── Bounds registry (class-level, not a field) ─────────────────────
 
@@ -117,6 +143,12 @@ class SignalParams:
         "stop_loss_pct": ParamBound(0.05, 0.02, 0.10),
         "take_profit_pct": ParamBound(0.15, 0.05, 0.30),
         "trailing_stop_pct": ParamBound(0.03, 0.01, 0.08),
+        "weight_momentum_bull": ParamBound(1.0, 0.2, 2.0),
+        "weight_momentum_bear": ParamBound(0.5, 0.0, 1.5),
+        "weight_mean_reversion": ParamBound(0.8, 0.2, 2.0),
+        "weight_volatility_spike": ParamBound(0.4, 0.0, 1.0),
+        "weight_low_vol_drift": ParamBound(0.6, 0.0, 1.5),
+        # Legacy param names (backward compat)
         "weight_trending_up": ParamBound(1.0, 0.2, 2.0),
         "weight_trending_down": ParamBound(0.5, 0.0, 1.5),
         "weight_mean_reverting": ParamBound(0.8, 0.2, 2.0),
@@ -409,9 +441,16 @@ class SignalEngine:
         )
 
         # ── Regime ────────────────────────────────────────────────────
-        regime, regime_conf, regime_weight = self._classify_regime(
-            prices, mom_score, vol, p
-        )
+        # Use K-Means regime detector when model is available;
+        # fall back to rule-based classifier otherwise.
+        try:
+            regime, regime_conf, regime_weight = self._predict_regime(
+                ticker, prices, mom_score, vol, p
+            )
+        except Exception:
+            regime, regime_conf, regime_weight = self._classify_regime(
+                prices, mom_score, vol, p
+            )
 
         # ── Position sizing ───────────────────────────────────────────
         # Base size, scaled by regime weight and conviction
@@ -441,6 +480,13 @@ class SignalEngine:
         rsi_z = (rsi - 50) / 25  # normalize RSI to roughly [-2, 2]
         rsi_component = -np.clip(rsi_z, -1, 1)  # negate: high RSI = bearish bias
         regime_bias = {
+            # K-Means regime labels
+            "momentum_bull": 0.7,
+            "momentum_bear": -0.7,
+            "mean_reversion": 0.0,
+            "volatility_spike": -0.3,
+            "low_vol_drift": -0.1,
+            # Legacy rule-based labels (backward compat)
             "TRENDING_UP": 0.7,
             "TRENDING_DOWN": -0.7,
             "MEAN_REVERTING": 0.0,
@@ -553,6 +599,93 @@ class SignalEngine:
             return 0.0
         returns = np.diff(np.log(prices))
         return float(np.std(returns, ddof=1) * np.sqrt(252))
+
+    def _predict_regime(
+        self,
+        ticker: str,
+        prices: List[float],
+        momentum: float,
+        volatility: float,
+        p: SignalParams,
+    ) -> Tuple[str, float, float]:
+        """Predict regime using K-Means detector when available.
+
+        Checks the module-level K-Means regime cache first (populated by
+        data_bus). If a recent prediction exists, uses it. Otherwise loads
+        the model from disk and extracts features from the ticker's price
+        history.
+
+        Falls back to rule-based _classify_regime if:
+        - No K-Means model or cache available
+        - Feature extraction fails
+        - Cluster prediction returns unexpected result
+
+        Returns:
+            (regime_name, confidence, position_weight)
+        """
+        # ── Priority 1: Check module-level cache (updated by data_bus) ───
+        if _kmeans_regime:
+            label = _kmeans_regime.get("regime", "")
+            confidence = _kmeans_regime.get("confidence", 0.5)
+            if label:
+                weight_map = {
+                    "momentum_bull": p.weight_momentum_bull,
+                    "momentum_bear": p.weight_momentum_bear,
+                    "mean_reversion": p.weight_mean_reversion,
+                    "volatility_spike": p.weight_volatility_spike,
+                    "low_vol_drift": p.weight_low_vol_drift,
+                }
+                weight = weight_map.get(label, p.weight_mean_reversion)
+                return label, confidence, weight
+
+        # ── Priority 2: Load model from disk and predict ────────────────
+        detector = _get_regime_detector()
+        if detector is None or not detector._kmeans:
+            return self._classify_regime(prices, momentum, volatility, p)
+
+        try:
+            closes = np.array(prices)
+            if len(closes) < 50:
+                return self._classify_regime(prices, momentum, volatility, p)
+
+            # Build approximate OHLCV from close prices for feature extraction
+            window_data = []
+            for i in range(len(closes)):
+                window = closes[max(0, i - 5):i + 1]
+                day_high = float(np.max(window)) if len(window) > 0 else closes[i]
+                day_low = float(np.min(window)) if len(window) > 0 else closes[i]
+                window_data.append({
+                    "symbol": ticker,
+                    "date": f"d{i}",
+                    "open": float(closes[i]) if i == 0 else float(closes[i - 1]),
+                    "high": day_high,
+                    "low": day_low,
+                    "close": float(closes[i]),
+                    "volume": 1,  # neutral volume
+                })
+
+            # Extract features and get the latest feature vector
+            features, names = detector._extract_features(window_data, [ticker])
+            if not features or not names:
+                return self._classify_regime(prices, momentum, volatility, p)
+
+            latest_features = dict(zip(names, features[-1]))
+            result = detector.predict(latest_features)
+
+            weight_map = {
+                "momentum_bull": p.weight_momentum_bull,
+                "momentum_bear": p.weight_momentum_bear,
+                "mean_reversion": p.weight_mean_reversion,
+                "volatility_spike": p.weight_volatility_spike,
+                "low_vol_drift": p.weight_low_vol_drift,
+            }
+            weight = weight_map.get(result.label, p.weight_mean_reversion)
+
+            return result.label, result.confidence, weight
+
+        except Exception as e:
+            log.debug(f"K-Means regime prediction failed for {ticker}: {e}")
+            return self._classify_regime(prices, momentum, volatility, p)
 
     @staticmethod
     def _classify_regime(

@@ -135,6 +135,90 @@ except ImportError as e:
     _get_agents = None
     write_reflection = None
 
+# ── K-Means regime detection helper ──────────────────────────────────────────
+
+def _predict_kmeans_regime() -> Optional[dict]:
+    """Predict market regime using K-Means detector on SPY data.
+
+    Loads the trained K-Means model from disk, fetches SPY OHLCV data
+    from Postgres, extracts feature vectors, and returns the predicted
+    regime label with confidence.
+
+    Returns:
+        dict with regime info, or None if model/data unavailable.
+    """
+    from pathlib import Path
+    MODEL_PATH = "/home/openclaw/data/regime_kmeans.pkl"
+    if not Path(MODEL_PATH).exists():
+        return None
+
+    try:
+        from src.regime_detector import RegimeDetector
+        import psycopg2
+        import psycopg2.extras
+
+        detector = RegimeDetector(k=5, model_path=MODEL_PATH)
+        if detector._kmeans is None:
+            return None
+
+        # Fetch SPY daily bars from Postgres
+        DB_URL = "postgresql://trader:@192.168.1.179:5433/trading"
+        conn = psycopg2.connect(DB_URL)
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                """SELECT symbol, date, open, high, low, close, volume
+                   FROM market_data.bars_1d
+                   WHERE symbol = 'SPY'
+                   ORDER BY date DESC
+                   LIMIT 252"""
+            )
+            rows = cur.fetchall()
+            cur.close()
+        finally:
+            conn.close()
+
+        if len(rows) < 50:
+            return None
+
+        # Build feature-compatible data list (oldest first)
+        data = []
+        rows_reversed = list(reversed(rows))
+        for row in rows_reversed:
+            data.append({
+                "symbol": "SPY",
+                "date": row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"]),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row["volume"]),
+            })
+
+        # Extract latest feature vector
+        features, names = detector._extract_features(data, ["SPY"])
+        if not features or not names:
+            return None
+
+        latest = dict(zip(names, features[-1]))
+        result = detector.predict(latest)
+
+        return {
+            "regime": result.label,
+            "regime_label": result.label.replace("_", " ").title(),
+            "confidence": round(result.confidence, 4),
+            "cluster_id": result.cluster,
+            "k_clusters": detector.k,
+            "description": result.description,
+            "retrain_age_hours": round(result.retrain_age_hours, 1),
+            "features": result.features,
+        }
+
+    except Exception as e:
+        log.debug("K-Means regime prediction error: %s", e)
+        return None
+
+
 # ── News collector (RSS aggregation) ──────────────────────────────────────────
 try:
     from src.news_collector import start_news_collector, ensure_news_cache_table
@@ -5435,11 +5519,28 @@ if _mcp_tools_enabled():
 
     @mcp_server.tool()
     async def get_market_regime() -> dict:
-        """Get current market regime from ML signal (bullish/bearish/choppy/sustainable/exhausted)."""
+        """Get current market regime from K-Means detection with rule-based fallback."""
         cache_key = "ml_signal:SPY"
         cached = _cache.get(cache_key, TTL["technical_scan"])
         if cached is not None:
             return {"market_regime": cached, "source": "cache"}
+
+        # ── Try K-Means regime detector first ──────────────────────────
+        try:
+            kmeans_result = _predict_kmeans_regime()
+            if kmeans_result is not None:
+                _cache.set(cache_key, kmeans_result)
+                # Also push to signals module cache for sync access
+                try:
+                    from src.signals import _kmeans_regime
+                    _kmeans_regime.update(kmeans_result)
+                except Exception:
+                    pass
+                return {"market_regime": kmeans_result, "source": "kmeans"}
+        except Exception as e:
+            log.debug("K-Means regime prediction failed: %s", e)
+
+        # ── Fall back to legacy ML signal ──────────────────────────────
         if fetch_ml_signal is None:
             return {"market_regime": None, "error": "ML signal module unavailable (skill_combo_fetch not loaded)"}
         try:
