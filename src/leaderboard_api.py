@@ -931,7 +931,11 @@ def api_journal():
             try:
                 rows = conn.execute(
                     "SELECT agent_id, timestamp, mood, entry, confidence "
-                    "FROM trader_journal ORDER BY timestamp DESC LIMIT %s",
+                    "FROM (SELECT DISTINCT ON (agent_id, timestamp, entry) "
+                    "      agent_id, timestamp, mood, entry, confidence "
+                    "      FROM trader_journal "
+                    "      ORDER BY agent_id, timestamp, entry) AS deduped "
+                    "ORDER BY timestamp DESC LIMIT %s",
                     (limit,)
                 ).fetchall()
                 entries = [dict(r) for r in rows]

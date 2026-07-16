@@ -417,12 +417,14 @@ async def insert_journal_entry(
     drawdown_pct: Decimal,
     rationale: Optional[str] = None,
 ) -> None:
-    """Insert a journal entry."""
+    """Insert a journal entry (idempotent — skips duplicates)."""
     await execute(
         """
         INSERT INTO trading.journal
             (trader_id, timestamp, ticker, decision, rationale, equity, drawdown_pct)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (trader_id, timestamp, ticker, decision, md5(COALESCE(rationale, '')))
+        DO NOTHING
         """,
         trader_id, timestamp, ticker, decision, rationale, equity, drawdown_pct,
     )
