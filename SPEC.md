@@ -193,7 +193,7 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 
 | SPEC Claim | Live State | Impact |
 |---|---|---|
-| XGBoost accuracy 78% | Kairos prompt says 63% | Stale model or stale prompt — can't tell which |
+| ~~XGBoost accuracy 78%~~ | ✅ Resolved 2026-07-16 — model never deployed (no `.pkl` file); 63% was a false attribution (Kairos prompt doesn't mention it) | Moved to Not Yet Deployed |
 | K-Means regime with 10 features | Rule-based `TRENDING_UP/DOWN/HIGH_VOL/MEAN_REVERTING` | K-means not deployed; old classifier still running |
 | Multi-date walk-forward sweep | Single-date sweep with synthetic data fallback | Prompt overfitting; synthetic data is noise |
 | Pre-market format validation blocks open | No evidence this gate is active | Broken prompts could hit production |
@@ -205,7 +205,8 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 | Virtual traders (shadow + rotation) | Not deployed — tables don't exist | P2 |
 | K-Means regime detector (`regime_detector.py`) | Spec defined, not deployed | P3 |
 | BarLoader + backfill pipeline | Parquet data severely lopsided (61K rows on one day, 2 on others) | P1 |
-| CostModel in replay | Implemented — wired into nightly_replay + kairos_backtest | Done |
+| XGBoost momentum classifier | Spec defines 78% accuracy in `specs/signal-engine.md`, no model file exists in repo | P2 |
+| CostModel in replay | Not implemented | P2 |
 
 ### Live System Health
 
@@ -215,9 +216,11 @@ gh issue create --repo Tesselation-Studios/paper-trading-rebuild --title "..." -
 | **Aldridge** | — | 50% | **75%** | 🔴 Should be knocked out |
 | **Stonks** | $0 | 0% | 13.2% | 🔴 Not trading at all |
 
-### ⚠️ Active Risk: Prompt Bloat
-
-Nightly synthesis is appended into AGENTS.md (~80 lines/night). Current files are ~10K chars — approaching OpenClaw's 12K hard limit. Mid-file instructions will silently be truncated. Synthesis MUST be moved to a separate file or DB.
+|### ⚠️ Active Risk: Prompt Bloat
+|
+|Nightly synthesis is appended into AGENTS.md (~80 lines/night). Current files are ~10K chars — approaching OpenClaw's 12K hard limit. Mid-file instructions will silently be truncated. Synthesis MUST be moved to a separate file or DB.
+|
+|**Fix applied (#175):** `scripts/separate_synthesis_output.py` is a guard script that runs pre-synthesis to check all AGENTS.md files for embedded synthesis output, extract it to `reports/`, and report file sizes. Run it before any nightly synthesis job. Use `--guard` flag in CI/cron to fail-fast if any file exceeds 10K chars.
 
 ### Action Items from Fusion Router
 
