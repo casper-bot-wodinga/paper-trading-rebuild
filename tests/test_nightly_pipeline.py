@@ -178,7 +178,7 @@ class TestStepSignalSweep:
         results = step_signal_sweep(
             trader="kairos",
             date_str="2026-07-09",
-            n_dates=5,
+            n_dates=8,
             train_days=3,
             val_days=1,
             n_variants=2,
