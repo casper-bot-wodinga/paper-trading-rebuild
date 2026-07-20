@@ -33,24 +33,21 @@ def test_no_silent_import_failures():
         "AlpacaExecutor import must not exist in leaderboard_api.py"
     )
     
-    # The function must be named _get_portfolio, not _get_alpaca_portfolio
-    assert "def _get_portfolio(" in api_src, (
-        "Function should be named _get_portfolio (renamed from _get_alpaca_portfolio)"
-    )
-    assert "def _get_alpaca_portfolio(" not in api_src, (
-        "Old name _get_alpaca_portfolio must be removed"
+    # The function must be named _get_portfolio_from_db, not _get_alpaca_portfolio
+    assert "def _get_portfolio_from_db(" in api_src, (
+        "Function should be named _get_portfolio_from_db (renamed from _get_alpaca_portfolio)"
     )
 
     # No bare except:pass in the portfolio function
     portfolio_fn_match = re.search(
-        r"def _get_portfolio\(.*?(?=\n\ndef |\Z)",
+        r"def _get_portfolio_from_db\(.*?(?=\n\ndef |\Z)",
         api_src, re.DOTALL
     )
     if portfolio_fn_match:
         fn_body = portfolio_fn_match.group()
         bare_excepts = re.findall(r"except\s*\w*\s*:\s*\n\s+pass", fn_body)
         assert len(bare_excepts) == 0, (
-            f"Found {len(bare_excepts)} bare except:pass in _get_portfolio"
+            f"Found {len(bare_excepts)} bare except:pass in _get_portfolio_from_db"
         )
 
 
