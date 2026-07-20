@@ -404,79 +404,92 @@ class TestParamExtraction:
     correctly extracts candidate + baseline params for validation.
     """
 
+    def _mock_modules(self):
+        """Save and replace sys.modules entries with MagicMock, return cleanup callable."""
+        import sys
+        originals = {}
+        for key in ("psycopg2", "psycopg2.extras", "yaml"):
+            originals[key] = sys.modules.get(key)
+            sys.modules[key] = MagicMock()
+
+        def cleanup():
+            for key, original in originals.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
+
+        return cleanup
+
     def test_extract_params_from_dict(self):
         """Params stored as dict in JSONB are extracted correctly."""
         # Import the function (it's in promote_virtual_to_live.py)
         import importlib.util
         import sys
 
-        spec = importlib.util.spec_from_file_location(
-            "promote_virtual_to_live",
-            Path(__file__).resolve().parent.parent / "scripts" / "promote_virtual_to_live.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
+        cleanup = self._mock_modules()
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "promote_virtual_to_live",
+                Path(__file__).resolve().parent.parent / "scripts" / "promote_virtual_to_live.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
 
-        # Patch modules not available in test
-        sys.modules["psycopg2"] = MagicMock()
-        sys.modules["psycopg2.extras"] = MagicMock()
-        sys.modules["yaml"] = MagicMock()
+            virtual = {
+                "name": "test-variant-0715",
+                "base_trader": "kairos",
+                "params": {"momentum_threshold": 0.60, "stop_loss_pct": 0.05},
+            }
 
-        spec.loader.exec_module(mod)
-
-        virtual = {
-            "name": "test-variant-0715",
-            "base_trader": "kairos",
-            "params": {"momentum_threshold": 0.60, "stop_loss_pct": 0.05},
-        }
-
-        params = mod._extract_params_from_virtual(virtual, "kairos")
-        assert params["momentum_threshold"] == 0.60
-        assert params["stop_loss_pct"] == 0.05
+            params = mod._extract_params_from_virtual(virtual, "kairos")
+            assert params["momentum_threshold"] == 0.60
+            assert params["stop_loss_pct"] == 0.05
+        finally:
+            cleanup()
 
     def test_extract_params_from_json_string(self):
         """Params stored as JSON string are parsed correctly."""
         import importlib.util
         import sys
 
-        spec = importlib.util.spec_from_file_location(
-            "promote_virtual_to_live",
-            Path(__file__).resolve().parent.parent / "scripts" / "promote_virtual_to_live.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
+        cleanup = self._mock_modules()
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "promote_virtual_to_live",
+                Path(__file__).resolve().parent.parent / "scripts" / "promote_virtual_to_live.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
 
-        sys.modules["psycopg2"] = MagicMock()
-        sys.modules["psycopg2.extras"] = MagicMock()
-        sys.modules["yaml"] = MagicMock()
+            virtual = {
+                "name": "test-variant-0715",
+                "base_trader": "kairos",
+                "params": json.dumps({"momentum_threshold": 0.65, "rsi_oversold": 25.0}),
+            }
 
-        spec.loader.exec_module(mod)
-
-        virtual = {
-            "name": "test-variant-0715",
-            "base_trader": "kairos",
-            "params": json.dumps({"momentum_threshold": 0.65, "rsi_oversold": 25.0}),
-        }
-
-        params = mod._extract_params_from_virtual(virtual, "kairos")
-        assert params["momentum_threshold"] == 0.65
-        assert params["rsi_oversold"] == 25.0
+            params = mod._extract_params_from_virtual(virtual, "kairos")
+            assert params["momentum_threshold"] == 0.65
+            assert params["rsi_oversold"] == 25.0
+        finally:
+            cleanup()
 
     def test_extract_params_empty(self):
         """Empty params dict returns empty dict."""
         import importlib.util
         import sys
 
-        spec = importlib.util.spec_from_file_location(
-            "promote_virtual_to_live",
-            Path(__file__).resolve().parent.parent / "scripts" / "promote_virtual_to_live.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
+        cleanup = self._mock_modules()
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "promote_virtual_to_live",
+                Path(__file__).resolve().parent.parent / "scripts" / "promote_virtual_to_live.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
 
-        sys.modules["psycopg2"] = MagicMock()
-        sys.modules["psycopg2.extras"] = MagicMock()
-        sys.modules["yaml"] = MagicMock()
-
-        spec.loader.exec_module(mod)
-
-        virtual = {"name": "test-variant", "base_trader": "kairos", "params": {}}
-        params = mod._extract_params_from_virtual(virtual, "kairos")
-        assert params == {}
+            virtual = {"name": "test-variant", "base_trader": "kairos", "params": {}}
+            params = mod._extract_params_from_virtual(virtual, "kairos")
+            assert params == {}
+        finally:
+            cleanup()

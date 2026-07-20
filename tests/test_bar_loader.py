@@ -264,53 +264,58 @@ class TestMissingDates:
 
 
 class TestSqliteCache:
-    def test_caches_and_returns_count(self, loader):
-        count = loader.to_sqlite_cache(["SPY", "AAPL"], "2026-07-01", "2026-07-02")
+    """Tests for SQLite cache operations, isolated from mocking interference."""
+
+    @pytest.fixture
+    def fresh_loader(self, sample_bars_dir):
+        """Create a fresh BarLoader with a dedicated temp db_path per test."""
+        bars_dir, _ = sample_bars_dir
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = Path(f.name)
+        bl = BarLoader(bars_dir=bars_dir, db_path=db_path)
+        yield bl
+        db_path.unlink(missing_ok=True)
+
+    def test_caches_and_returns_count(self, fresh_loader):
+        count = fresh_loader.to_sqlite_cache(["SPY", "AAPL"], "2026-07-01", "2026-07-02")
         assert count > 0
 
-    def test_load_from_cache_returns_ticks(self, loader):
-        loader.to_sqlite_cache(["SPY"], "2026-07-01", "2026-07-02")
-        cached = loader.load_from_cache(tickers=["SPY"])
+    def test_load_from_cache_returns_ticks(self, fresh_loader):
+        fresh_loader.to_sqlite_cache(["SPY"], "2026-07-01", "2026-07-02")
+        cached = fresh_loader.load_from_cache(tickers=["SPY"])
         assert len(cached) > 0
         assert all(isinstance(t, Tick) for t in cached)
         assert all(t.ticker == "SPY" for t in cached)
 
-    def test_cache_date_filter(self, loader):
-        loader.to_sqlite_cache(["SPY"], "2026-07-01", "2026-07-02")
-        cached_july1 = loader.load_from_cache(
+    def test_cache_date_filter(self, fresh_loader):
+        fresh_loader.to_sqlite_cache(["SPY"], "2026-07-01", "2026-07-02")
+        cached_july1 = fresh_loader.load_from_cache(
             tickers=["SPY"], start_date="2026-07-01", end_date="2026-07-01"
         )
-        cached_all = loader.load_from_cache(tickers=["SPY"])
+        cached_all = fresh_loader.load_from_cache(tickers=["SPY"])
         assert len(cached_july1) <= len(cached_all)
 
-    def test_cache_ticker_filter(self, loader):
-        loader.to_sqlite_cache(["SPY", "AAPL"], "2026-07-01", "2026-07-02")
-        spy_only = loader.load_from_cache(tickers=["SPY"])
+    def test_cache_ticker_filter(self, fresh_loader):
+        fresh_loader.to_sqlite_cache(["SPY", "AAPL"], "2026-07-01", "2026-07-02")
+        spy_only = fresh_loader.load_from_cache(tickers=["SPY"])
         assert all(t.ticker == "SPY" for t in spy_only)
 
-    def test_empty_cache_returns_empty(self, loader):
+    def test_empty_cache_returns_empty(self, fresh_loader):
         # Load from cache without populating it first
-        # Use a fresh loader to ensure empty cache
-        bars_dir = loader.bars_dir
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            fresh_db = Path(f.name)
-        try:
-            bl = BarLoader(bars_dir=bars_dir, db_path=fresh_db)
-            cached = bl.load_from_cache()
-            assert cached == []
-        finally:
-            fresh_db.unlink(missing_ok=True)
+        # fresh_loader already has an empty fresh DB
+        cached = fresh_loader.load_from_cache()
+        assert cached == []
 
-    def test_cache_is_reproducible(self, loader):
+    def test_cache_is_reproducible(self, fresh_loader):
         """Loading from Parquet and from cache should produce identical ticks."""
         # Use interval_minutes=1 so cache matches raw ticks
-        from_parquet = loader.load_date_range(
+        from_parquet = fresh_loader.load_date_range(
             ["SPY"], "2026-07-01", "2026-07-01", interval_minutes=1
         )
 
-        loader.to_sqlite_cache(["SPY"], "2026-07-01", "2026-07-01", interval_minutes=1)
-        from_cache = loader.load_from_cache(
+        fresh_loader.to_sqlite_cache(["SPY"], "2026-07-01", "2026-07-01", interval_minutes=1)
+        from_cache = fresh_loader.load_from_cache(
             tickers=["SPY"], start_date="2026-07-01", end_date="2026-07-01"
         )
 
