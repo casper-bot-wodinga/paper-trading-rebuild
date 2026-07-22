@@ -129,6 +129,14 @@ class ReplayResult:
     n_decisions: int  # how many non-HOLD decisions were made
     tickers_seen: List[str]
 
+    # One timestamp per equity_curve/returns entry — needed to properly
+    # resample to daily returns before computing Sharpe/Sortino/etc, since
+    # equity_curve has one entry per (ticker, tick) pair when replaying an
+    # interleaved multi-ticker stream, not one per calendar day. Empty list
+    # for callers that don't need it — backward compatible, existing
+    # consumers unaffected.
+    timestamps: List[datetime] = field(default_factory=list)
+
     # Cost-adjusted fields (populated when cost_model is active)
     gross_pnl: float = 0.0     # P&L before transaction costs
     total_cost: float = 0.0    # total transaction cost deducted
@@ -259,6 +267,7 @@ class ReplayHarness:
             # Record equity snapshot
             current_equity = self._portfolio.total_equity
             self._equity.append(current_equity)
+            self._timestamps.append(tick.timestamp)
             if prev_equity > 0:
                 self._returns.append((current_equity - prev_equity) / prev_equity)
             else:
@@ -274,6 +283,7 @@ class ReplayHarness:
         self._trades = []
         self._equity = []
         self._returns = []
+        self._timestamps = []
         self._decision_count = 0
         self._tickers_seen = []
 
@@ -422,6 +432,7 @@ class ReplayHarness:
             final_equity=final_equity,
             total_pnl=net_pnl,
             total_return_pct=(final_equity - self.initial_balance) / self.initial_balance * 100,
+            timestamps=list(self._timestamps),
             n_ticks=n_ticks,
             n_decisions=self._decision_count,
             tickers_seen=list(dict.fromkeys(self._tickers_seen)),

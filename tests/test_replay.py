@@ -201,6 +201,31 @@ class TestReplayHarnessBasic:
         assert len(result.equity_curve) == 25
         assert len(result.returns) == 25
 
+    def test_timestamps_match_equity_curve(self):
+        """timestamps (added 2026-07-22 for downstream Sharpe/Sortino
+        scoring — see paper-trading-agents/scripts/replay_check.py) must
+        line up 1:1 with equity_curve/returns and match each tick's actual
+        timestamp, in order — a caller resampling to daily equity depends
+        on this."""
+        ticks = make_uptrend_ticks(n=25)
+        harness = ReplayHarness()
+        result = harness.run(ticks, buy_hold_trader)
+        assert len(result.timestamps) == len(result.equity_curve)
+        assert result.timestamps == [t.timestamp for t in ticks]
+
+    def test_timestamps_default_empty_for_manually_built_result(self):
+        """Backward compat: a ReplayResult built without timestamps (e.g.
+        older code, or the cost-model's internal temp result) defaults to
+        an empty list rather than requiring the field."""
+        result = ReplayResult(
+            equity_curve=np.array([100.0, 101.0]),
+            returns=np.array([0.0, 0.01]),
+            trades=[], initial_balance=100.0, final_equity=101.0,
+            total_pnl=1.0, total_return_pct=1.0, n_ticks=2,
+            n_decisions=0, tickers_seen=["X"],
+        )
+        assert result.timestamps == []
+
     def test_trade_record(self):
         """Verify trade records have correct fields."""
         ticks = make_uptrend_ticks(n=40, start_price=100.0, drift=0.20, seed=3)
