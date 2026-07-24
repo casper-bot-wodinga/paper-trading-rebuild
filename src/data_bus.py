@@ -2310,16 +2310,16 @@ def crypto():
 
 # ── Fundamentals ──────────────────────────────────────────────────────────────
 
-@app.route("/fundamentals")
-def fundamentals():
-    symbol = request.args.get("symbol", "").strip().upper()
-    if not symbol:
-        return jsonify({"error": "symbol parameter required"}), 400
+def _get_fundamentals_data(symbol: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Tiered fundamentals lookup: cache -> SQLite -> live combo_fetch -> SQLite -> yfinance web.
 
+    Shared by the /fundamentals REST route and the get_fundamentals MCP tool so the
+    fallback chain only lives in one place. Returns (data, source) or (None, None).
+    """
     cache_key = f"fundamentals:{symbol}"
     cached = _cache.get(cache_key, TTL["fundamentals"])
     if cached is not None:
-        return jsonify({"symbol": symbol, "fundamentals": cached, "source": "cache"})
+        return cached, "cache"
 
     # Try SQLite fallback first (only if it has real data, not all-null cache entries)
     db_row = _db_read("fundamentals", "ticker=?", (symbol,), order_by="fetched_at DESC")
@@ -2327,7 +2327,7 @@ def fundamentals():
         has_data = any(db_row.get(k) for k in ('pe_ratio', 'eps', 'dividend_yield', 'market_cap', 'analyst_target', 'roe', 'pe'))
         if has_data:
             _cache.set(cache_key, dict(db_row))
-            return jsonify({"symbol": symbol, "fundamentals": dict(db_row), "source": "sqlite"})
+            return dict(db_row), "sqlite"
 
     # Try live fetch
     data = _fetch_fundamentals(symbol)
@@ -2345,20 +2345,37 @@ def fundamentals():
                 "fetched_at": now_iso,
             }
             _write_queue.enqueue("fundamentals", fund_row)
-        return jsonify({"symbol": symbol, "fundamentals": data, "source": "combo_fetch"})
+        return data, "combo_fetch"
 
     # SQLite fallback
     sqlite_data = _sqlite_get_fundamentals(symbol)
     if sqlite_data and any(sqlite_data.get(k) for k in ('pe_ratio', 'eps', 'dividend_yield', 'analyst_target')):
         _cache.set(cache_key, dict(sqlite_data))
-        return jsonify({"symbol": symbol, "fundamentals": dict(sqlite_data), "source": "sqlite"})
+        return dict(sqlite_data), "sqlite"
 
     # Web fallback (yfinance)
     web_data = _fetch_fundamentals_web(symbol)
     if web_data:
         _cache.set(cache_key, web_data)
-        return jsonify({"symbol": symbol, "fundamentals": web_data, "source": "web_search_fallback", "quality": "partial"})
-    return jsonify({"symbol": symbol, "fundamentals": None, "error": "no data available"}), 404
+        return web_data, "web_search_fallback"
+
+    return None, None
+
+
+@app.route("/fundamentals")
+def fundamentals():
+    symbol = request.args.get("symbol", "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "symbol parameter required"}), 400
+
+    data, source = _get_fundamentals_data(symbol)
+    if data is None:
+        return jsonify({"symbol": symbol, "fundamentals": None, "error": "no data available"}), 404
+
+    resp = {"symbol": symbol, "fundamentals": data, "source": source}
+    if source == "web_search_fallback":
+        resp["quality"] = "partial"
+    return jsonify(resp)
 
 
 # ── Sentiment ─────────────────────────────────────────────────────────────────
@@ -5491,6 +5508,20 @@ if _mcp_tools_enabled():
         except Exception as e:
             log.warning("get_self_stats failed for %s: %s", agent_id, e)
             return {"error": "stats unavailable", "data": None}
+
+    @mcp_server.tool()
+    async def get_fundamentals(symbol: str) -> dict:
+        """Get fundamentals for a ticker: P/E, EPS, dividend yield, market cap, ROE, analyst target."""
+        sym = symbol.strip().upper()
+        if not sym:
+            return {"error": "symbol required"}
+        data, source = _get_fundamentals_data(sym)
+        if data is None:
+            return {"symbol": sym, "fundamentals": None, "error": "no data available"}
+        result = {"symbol": sym, "fundamentals": data, "source": source}
+        if source == "web_search_fallback":
+            result["quality"] = "partial"
+        return result
 
     log.info("MCP server: %d tools registered", len(mcp_server._tool_manager._tools))
 
