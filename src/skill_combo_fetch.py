@@ -595,7 +595,11 @@ def fetch_ml_signal(ticker: str) -> dict:
 
     Falls back gracefully if the endpoint is unreachable.
     """
-    endpoint = os.getenv("ML_ENDPOINT_URL", "http://localhost:5000")
+    # 2026-07-24: this defaulted to localhost:5000 (data_bus.py itself, no
+    # such route there) — the real worker is the Mac GPU box. ML_ENDPOINT_URL
+    # is now set correctly in .env; this default is just a safety net so a
+    # missing env var fails toward the right host instead of a silent 404.
+    endpoint = os.getenv("ML_ENDPOINT_URL", "http://legend-of-macs.local:5005")
 
     try:
         # First, fetch 90 days of historical bars for feature warmup
