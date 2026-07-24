@@ -5518,21 +5518,27 @@ if _mcp_tools_enabled():
 
     @mcp_server.tool()
     async def get_market_regime() -> dict:
-        """Get current market regime from ML signal (bullish/bearish/choppy/sustainable/exhausted)."""
+        """Get current market regime from the real gRPC-trained HMM (SUSTAINABLE/EXHAUSTED/CHOPPY),
+        retrained weekly on SPY (stonks-regime-retrain cron), features refreshed daily."""
         cache_key = "ml_signal:SPY"
         cached = _cache.get(cache_key, TTL["technical_scan"])
         if cached is not None:
             return {"market_regime": cached, "source": "cache"}
-        if fetch_ml_signal is None:
-            return {"market_regime": None, "error": "ML signal module unavailable (skill_combo_fetch not loaded)"}
         try:
-            result = fetch_ml_signal("SPY")
-            if result and "error" not in result:
+            import pandas as pd
+            bars_path = SRC_DIR.parent / "shared" / "cache" / "bars" / "SPY.parquet"
+            if not bars_path.exists():
+                return {"market_regime": None, "error": f"no SPY bars at {bars_path}"}
+            df = pd.read_parquet(bars_path)
+            from src import ml_signal
+            result = await ml_signal.get_regime("SPY", df)
+            if result.get("source") == "grpc":
                 _cache.set(cache_key, result)
                 return {"market_regime": result, "source": "live"}
+            return {"market_regime": None, "error": result.get("error", "regime signal unavailable")}
         except Exception as e:
+            log.warning("get_market_regime failed: %s", e)
             return {"market_regime": None, "error": str(e)}
-        return {"market_regime": None, "error": "ML signal unavailable"}
 
     @mcp_server.tool()
     async def get_self_stats(agent_id: str) -> dict:
