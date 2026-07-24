@@ -271,7 +271,7 @@ except ImportError:
 
 # ── MCP client imports ───────────────────────────────────────────────────────
 try:
-    from mcp_client import (
+    from src.mcp_client import (
         MCPConnectionManager,
         MCPConnectionConfig,
         get_manager,
@@ -1371,6 +1371,22 @@ def _lonestar_call(tool_name: str, params: dict = None, timeout: float = None) -
         return None
 
 
+def _lonestar_unusable(text: str, data: Optional[dict] = None) -> bool:
+    """True if a lonestar response is a paywall/validation-error, not real data.
+
+    2026-07-24: connecting mcp_client.py for real exposed that several
+    lonestar tools (portfolio_risk, multi_timeframe_scan, and intermittently
+    macro_indicators) are behind an x402 (USDC) paywall on the free tier —
+    the response is well-formed JSON with payment_required: true, not an
+    error, so it was silently being treated as real data and returned
+    instead of falling through to the free fallback (FRED for macro, etc).
+    Also still catches the raw pydantic validation-error text case."""
+    if data and data.get("payment_required"):
+        return True
+    lowered = (text or "").lower()
+    return "validation error" in lowered or "missing required" in lowered
+
+
 def _lonestar_text(result: Optional[dict]) -> Optional[str]:
     """Extract text content from an MCP tool result."""
     if not result:
@@ -1387,6 +1403,27 @@ def _lonestar_text(result: Optional[dict]) -> Optional[str]:
     return None
 
 
+def _lonestar_parse(result: Optional[dict], tool_name: str) -> Optional[dict]:
+    """Shared parse step for every _fetch_lonestar_* function: extract text,
+    reject paywall/validation-error responses, stamp source/fetched_at.
+    Returns None on anything unusable so callers fall through to their
+    free fallback instead of returning a paywall blob as if it were data."""
+    text = _lonestar_text(result)
+    if not text:
+        return None
+    import json as _json
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError:
+        data = {"raw_text": text[:2000]}
+    if _lonestar_unusable(text, data if isinstance(data, dict) else None):
+        log.debug("LoneStarOracle %s unusable (paywall/validation error): %s", tool_name, text[:200])
+        return None
+    data["source"] = "lonestar"
+    data["fetched_at"] = datetime.now().isoformat()
+    return data
+
+
 def _fetch_lonestar_options_flow(symbol: str = None) -> Optional[dict]:
     """Fetch options flow from LoneStarOracle MCP.
 
@@ -1397,21 +1434,7 @@ def _fetch_lonestar_options_flow(symbol: str = None) -> Optional[dict]:
         return None
     params = {"ticker": symbol.upper()}
     result = _lonestar_call("options_flow", params)
-    text = _lonestar_text(result)
-    if text:
-        # Reject lonestar validation errors (not JSON, just a Pydantic error trace)
-        if "validation error" in text.lower() or "missing required" in text.lower():
-            log.debug("LoneStarOracle options_flow validation error: %s", text[:200])
-            return None
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "options_flow")
 
 
 def _fetch_lonestar_insider_trades(symbol: str = None) -> Optional[dict]:
@@ -1420,33 +1443,13 @@ def _fetch_lonestar_insider_trades(symbol: str = None) -> Optional[dict]:
     if symbol:
         params["ticker"] = symbol.upper()
     result = _lonestar_call("insider_trading", params if params else None)
-    text = _lonestar_text(result)
-    if text:
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "insider_trading")
 
 
 def _fetch_lonestar_macro() -> Optional[dict]:
     """Fetch macro indicators from LoneStarOracle MCP."""
     result = _lonestar_call("macro_indicators")
-    text = _lonestar_text(result)
-    if text:
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "macro_indicators")
 
 
 def _fetch_lonestar_earnings(symbol: str = None) -> Optional[dict]:
@@ -1455,17 +1458,7 @@ def _fetch_lonestar_earnings(symbol: str = None) -> Optional[dict]:
     if symbol:
         params["ticker"] = symbol.upper()
     result = _lonestar_call("earnings_calendar", params if params else None)
-    text = _lonestar_text(result)
-    if text:
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "earnings_calendar")
 
 
 def _fetch_lonestar_risk(symbols: List[str] = None) -> Optional[dict]:
@@ -1474,51 +1467,25 @@ def _fetch_lonestar_risk(symbols: List[str] = None) -> Optional[dict]:
     if symbols:
         params["tickers"] = ",".join(symbols)
     result = _lonestar_call("portfolio_risk", params if params else None)
-    text = _lonestar_text(result)
-    if text:
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "portfolio_risk")
 
 
 def _fetch_lonestar_technical_scan(symbol: str) -> Optional[dict]:
     """Fetch multi-timeframe technical scan from LoneStarOracle MCP."""
-    params = {"ticker": symbol.upper()}
+    # 2026-07-24: lonestar's multi_timeframe_scan takes `symbol`, not `ticker`
+    # — confirmed via a live pydantic validation error once mcp_client.py was
+    # actually wired up (this call was never reaching lonestar correctly
+    # before that, so the bad kwarg went unnoticed).
+    params = {"symbol": symbol.upper()}
     result = _lonestar_call("multi_timeframe_scan", params)
-    text = _lonestar_text(result)
-    if text:
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "multi_timeframe_scan")
 
 
 def _fetch_lonestar_equity_analysis(symbol: str) -> Optional[dict]:
     """Fetch equity analysis from LoneStarOracle MCP."""
     params = {"ticker": symbol.upper()}
     result = _lonestar_call("equity_analysis", params)
-    text = _lonestar_text(result)
-    if text:
-        import json as _json
-        try:
-            data = _json.loads(text)
-        except _json.JSONDecodeError:
-            data = {"raw_text": text[:2000]}
-        data["source"] = "lonestar"
-        data["fetched_at"] = datetime.now().isoformat()
-        return data
-    return None
+    return _lonestar_parse(result, "equity_analysis")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
