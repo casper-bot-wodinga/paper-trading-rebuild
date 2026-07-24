@@ -1,0 +1,116 @@
+syntax = "proto3";
+package gpucompute;
+
+service GpuWorker {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc GetCapabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+  rpc UploadFile(stream FileChunk) returns (UploadResponse);
+  rpc DownloadFile(FileRequest) returns (stream FileChunk);
+  rpc SubmitJob(JobRequest) returns (JobHandle);
+  rpc StreamJob(JobStatusRequest) returns (stream JobUpdate);
+  rpc GetJob(JobStatusRequest) returns (JobUpdate);
+  rpc CancelJob(JobStatusRequest) returns (JobUpdate);
+  rpc UploadModel(stream ModelChunk) returns (UploadResponse);
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}
+
+message HealthRequest {}
+message HealthResponse {
+  string worker_id = 1;
+  WorkerState state = 2;
+  int32 queue_depth = 3;
+  string current_job = 4;
+  float gpu_mem_free_mb = 5;
+  int64 uptime_sec = 6;
+}
+enum WorkerState { IDLE = 0; BUSY = 1; DRAINING = 2; UNHEALTHY = 3; }
+
+message CapabilitiesRequest {}
+message CapabilitiesResponse {
+  string worker_id = 1;
+  repeated string job_types = 2;
+  repeated string models = 3;
+  string device = 4;
+  string qmd_version = 5;
+}
+
+message JobRequest {
+  string job_type = 1;
+  oneof payload {
+    TrainJob train = 2;
+    InferenceJob infer = 3;
+    EmbedJob embed = 4;
+  }
+  string idempotency_key = 5;
+  int32 priority = 6;
+}
+
+message TrainJob {
+  string model_type = 1;
+  string symbol = 2;
+  map<string,string> params = 3;
+  bool write_reload_flag = 4;
+}
+
+message InferenceJob {
+  string model_name = 1;
+  bytes features_json = 2;
+}
+
+message EmbedJob {
+  string staged_index_path = 1;
+  string collection = 2;
+  map<string,string> args = 3;
+}
+
+message JobHandle { string job_id = 1; JobPhase phase = 2; }
+
+message JobStatusRequest { string job_id = 1; }
+
+message JobUpdate {
+  string job_id = 1;
+  JobPhase phase = 2;
+  int32 queue_position = 3;
+  float progress = 4;
+  string log_line = 5;
+  bytes result_json = 6;
+  string artifact_path = 7;
+  string error = 8;
+  int64 started_at = 9;
+  int64 finished_at = 10;
+}
+enum JobPhase { QUEUED = 0; RUNNING = 1; COMPLETED = 2; FAILED = 3; CANCELLED = 4; }
+
+message ModelChunk {
+  oneof kind {
+    ModelMeta meta = 1;
+    bytes data = 2;
+  }
+}
+message ModelMeta { string model_name = 1; string filename = 2; int64 size = 3; string sha256 = 4; }
+message UploadResponse { bool ok = 1; string stored_path = 2; string sha256 = 3; bool reloaded = 4; }
+
+message ListModelsRequest {}
+message ListModelsResponse { repeated ModelInfo models = 1; }
+message ModelInfo { string name = 1; string path = 2; int64 size = 3; int64 mtime = 4; string sha256 = 5; }
+
+message FileRequest {
+  string path = 1;
+  string job_id = 2;
+  string staging_subdir = 3;
+}
+
+message FileChunk {
+  oneof kind {
+    FileMeta meta = 1;
+    bytes data = 2;
+  }
+}
+
+message FileMeta {
+  string filename = 1;
+  int64 size = 2;
+  string sha256 = 3;
+  string job_id = 4;
+  string staging_subdir = 5;
+}
