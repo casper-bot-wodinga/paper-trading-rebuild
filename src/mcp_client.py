@@ -668,6 +668,26 @@ class MCPClient:
             return False
 
 
+def _stop_dedicated_loop(session: Any) -> None:
+    """Stop a session's dedicated background event-loop thread.
+
+    connect_streamable_http (and stdio) spawn a daemon thread running its own
+    event loop via loop.run_forever() — anyio task groups used by those
+    transports can't be driven cross-thread via run_coroutine_threadsafe, so
+    each connection gets a dedicated loop. That loop only stops if something
+    explicitly calls loop.stop() on it; MCPClient.disconnect() tears down the
+    session/transport but never touches the loop. Call this anywhere a
+    session is being discarded, or the thread leaks forever.
+    """
+    for attr in ('_streamable_loop', '_stdio_loop'):
+        dedicated_loop = getattr(session, attr, None)
+        if dedicated_loop is not None:
+            try:
+                dedicated_loop.call_soon_threadsafe(dedicated_loop.stop)
+            except Exception:
+                pass
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # MCPConnectionManager — Singleton
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -763,6 +783,15 @@ class MCPConnectionManager:
                     )
                 except Exception as e:
                     log.debug("MCP %s: cleanup error: %s", name, e)
+                # MCPClient.disconnect() only tears down the session/transport —
+                # it never stops the dedicated event-loop thread that
+                # connect_streamable_http spawns per connection (only
+                # MCPConnectionManager.disconnect() did that). Without this,
+                # every ping-failure reconnect here leaked one more orphaned
+                # thread running loop.run_forever() forever (confirmed
+                # 2026-07-24: 3 leaked mcp-streamable threads after 53min,
+                # ~90% sustained CPU on the event loop thread).
+                _stop_dedicated_loop(state._session)
                 state._session = None
                 state._read = None
                 state._write = None
@@ -830,14 +859,7 @@ class MCPConnectionManager:
                     )
                 except Exception as e:
                     log.debug("MCP %s: disconnect error: %s", name, e)
-                # Stop dedicated event loop (streamable HTTP or stdio)
-                for attr in ('_streamable_loop', '_stdio_loop'):
-                    dedicated_loop = getattr(state._session, attr, None)
-                    if dedicated_loop is not None:
-                        try:
-                            dedicated_loop.call_soon_threadsafe(dedicated_loop.stop)
-                        except Exception:
-                            pass
+                _stop_dedicated_loop(state._session)
                 state._session = None
                 state._read = None
                 state._write = None
